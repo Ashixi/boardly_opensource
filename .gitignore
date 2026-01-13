@@ -52,3 +52,14 @@ env/
 # --- Інше сміття ---
 *.log
 doc/api/
+
+# --- Database ---
+*.db
+*.sqlite3
+auth/users.db
+
+# --- Secrets ---
+auth/config.py
+
+# --- Trash ---
+auth/reproduce_issue.py
