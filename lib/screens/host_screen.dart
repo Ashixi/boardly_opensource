@@ -36,8 +36,6 @@ class _HostScreenState extends State<HostScreen> {
     _loadBoards();
   }
 
-
-
   Future<void> _loadBoards() async {
     setState(() {
       isLoading = true;
@@ -51,12 +49,16 @@ class _HostScreenState extends State<HostScreen> {
       for (var b in allBoards) {
         if (b.isJoined) continue;
 
-        if (b.ownerId == null) continue;
+        // ВИПРАВЛЕННЯ: Спочатку виправляємо статус дошки, а потім фільтруємо
         if (b.isConnectionBoard) {
           logger.i("Fixing corrupted host board: ${b.title}");
           b.isConnectionBoard = false;
           await BoardStorage.saveBoard(b);
+          // Після цього, якщо у дошки немає ownerId, вона з'явиться в "Моїх дошках",
+          // і ви зможете її видалити там.
         }
+
+        if (b.ownerId == null) continue;
 
         filtered.add(b);
       }
@@ -119,7 +121,8 @@ class _HostScreenState extends State<HostScreen> {
       return;
     }
 
-    if (!widget.isPro && hostingBoards.isNotEmpty) {
+    if (!widget.isPro && hostingBoards.length >= 4) {
+      // Fix limit check logic just in case
       if (!mounted) return;
       showDialog(
         context: context,
@@ -151,9 +154,7 @@ class _HostScreenState extends State<HostScreen> {
                       );
                     }
                   },
-                  child: Text(
-                    S.t('manage_subscription'),
-                  ),
+                  child: Text(S.t('manage_subscription')),
                 ),
               ],
             ),
@@ -192,10 +193,17 @@ class _HostScreenState extends State<HostScreen> {
     try {
       final newBoard = await widget.onAddNewAndHostBoard(customName.trim());
       if (!mounted) return;
-      await widget.onOpenAndHostBoard(newBoard);
+
+      // Важливо: спочатку оновлюємо список, щоб побачити нову дошку, потім відкриваємо
       await _loadBoards();
+      await widget.onOpenAndHostBoard(newBoard);
     } catch (e) {
       logger.e("Error creating host board: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error: $e")));
+      }
     }
   }
 

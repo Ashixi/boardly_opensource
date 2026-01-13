@@ -615,6 +615,10 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
 
   Future<BoardModel> _createAndSaveHostingBoard(String boardName) async {
     final userData = await AuthStorage.getUserData();
+    if (userData == null || userData.publicId.isEmpty) {
+      throw Exception("User data not found. Please relogin.");
+    }
+
     final boardApi = BoardApiService();
 
     try {
@@ -624,8 +628,8 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
       final newBoard = BoardModel(
         id: serverId,
         title: boardName,
-        ownerId: userData?.publicId,
-        isConnectionBoard: true,
+        ownerId: userData.publicId,
+        isConnectionBoard: false,
         isJoined: false,
       );
 
@@ -667,10 +671,22 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
 
   Future<void> _deleteBoardForHostScreen(BoardModel boardToDelete) async {
     try {
+      if (boardToDelete.id != null) {
+        try {
+          final api = BoardApiService();
+          await api.deleteBoard(boardToDelete.id!);
+        } catch (e) {
+          logger.w(
+            "Could not delete from server (maybe offline or already deleted): $e",
+          );
+        }
+      }
+
       await BoardStorage.deleteBoard(
         boardToDelete.id!,
         isConnectedBoard: false,
       );
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -702,9 +718,9 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
     final int limit = (_userData?.isPro == true) ? 100 : 4;
 
     _webRTCManager = WebRTCManager(
-      signalingServerUrl: 'ws://178.18.253.94:8000/ws', // Ваш URL
-      boardId: boardToHost.id!,
+      signalingServerUrl: 'ws://178.18.253.94:8000/ws',
       maxPeers: limit,
+      boardId: '',
     );
 
     _webRTCManager?.onLimitReached = () {

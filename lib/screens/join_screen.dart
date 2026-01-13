@@ -4,6 +4,8 @@ import 'package:boardly/widgets/board_card.dart';
 import 'package:boardly/services/localization.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:boardly/services/board_api_service.dart'; // <--- Додати це
+import 'package:boardly/logger.dart';
 
 class JoinScreen extends StatefulWidget {
   final Future<void> Function(String boardId, String boardTitle) onJoinBoard;
@@ -49,44 +51,8 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _showJoinNewBoardDialog(BuildContext context) async {
-    if (!widget.isPro && _joinedBoards.isNotEmpty) {
-      showDialog(
-        context: context,
-        builder:
-            (context) => AlertDialog(
-              title: Text(S.t('limit_reached')),
-              content: Text(S.t('limit_join_desc')),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(S.t('cancel')),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-
-                    String urlString;
-                    if (appLocale.value.languageCode == 'uk') {
-                      urlString = "https://boardly.studio/ua/profile.html";
-                    } else {
-                      urlString = "https://boardly.studio/en/login.html";
-                    }
-
-                    final Uri url = Uri.parse(urlString);
-                    if (await canLaunchUrl(url)) {
-                      await launchUrl(
-                        url,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    }
-                  },
-                  child: Text(S.t('manage_subscription')),
-                ),
-              ],
-            ),
-      );
-      return;
-    }
+    // Видаляємо локальну перевірку лімітів на початку.
+    // Тепер перевірка відбувається на сервері при спробі приєднання.
 
     final idController = TextEditingController();
     final titleController = TextEditingController();
@@ -94,51 +60,144 @@ class _JoinScreenState extends State<JoinScreen> {
     await showDialog(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          title: Text(S.t('joined')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: InputDecoration(labelText: S.t('title_for_self')),
-                autofocus: true,
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: idController,
-                decoration: InputDecoration(labelText: S.t('board_id')),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(S.t('cancel')),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final id = idController.text.trim();
-                final title = titleController.text.trim();
-                if (id.isEmpty || title.isEmpty) return;
+        bool isDialogLoading = false; // Локальний стан завантаження для діалогу
 
-                final newBoard = BoardModel(
-                  id: id,
-                  title: title,
-                  isJoined: true,
-                );
-                try {
-                  await BoardStorage.saveBoard(
-                    newBoard,
-                    isConnectedBoard: true,
-                  );
-                  if (context.mounted) Navigator.pop(context);
-                  await _loadBoards();
-                } catch (e) {}
-              },
-              child: Text(S.t('add')),
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(S.t('joined')),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    decoration: InputDecoration(
+                      labelText: S.t('title_for_self'),
+                    ),
+                    autofocus: true,
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: idController,
+                    decoration: InputDecoration(labelText: S.t('board_id')),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(S.t('cancel')),
+                ),
+                ElevatedButton(
+                  onPressed:
+                      isDialogLoading
+                          ? null
+                          : () async {
+                            final id = idController.text.trim();
+                            final title = titleController.text.trim();
+                            if (id.isEmpty || title.isEmpty) return;
+
+                            setDialogState(() => isDialogLoading = true);
+
+                            try {
+                              // 1. Спроба приєднатися на сервері (Тут перевіряються ліміти)
+                              final api = BoardApiService();
+                              await api.joinBoard(id);
+
+                              // 2. Якщо успішно — зберігаємо локально
+                              final newBoard = BoardModel(
+                                id: id,
+                                title: title,
+                                isJoined: true,
+                              );
+
+                              await BoardStorage.saveBoard(
+                                newBoard,
+                                isConnectedBoard: true,
+                              );
+
+                              if (mounted)
+                                Navigator.pop(
+                                  context,
+                                ); // Закриваємо діалог вводу
+                              await _loadBoards(); // Оновлюємо список
+                            } on BoardLimitException {
+                              // ЛІМІТ ВИЧЕРПАНО (403 від сервера)
+                              if (mounted) {
+                                Navigator.pop(
+                                  context,
+                                ); // Закриваємо діалог вводу
+
+                                // Відкриваємо діалог про Pro версію
+                                showDialog(
+                                  context: context,
+                                  builder:
+                                      (context) => AlertDialog(
+                                        title: Text(S.t('limit_reached')),
+                                        content: Text(S.t('limit_join_desc')),
+                                        actions: [
+                                          TextButton(
+                                            onPressed:
+                                                () => Navigator.pop(context),
+                                            child: Text(S.t('cancel')),
+                                          ),
+                                          ElevatedButton(
+                                            onPressed: () async {
+                                              Navigator.pop(context);
+                                              String urlString =
+                                                  (appLocale
+                                                              .value
+                                                              .languageCode ==
+                                                          'uk')
+                                                      ? "https://boardly.studio/ua/profile.html"
+                                                      : "https://boardly.studio/en/login.html";
+
+                                              final Uri url = Uri.parse(
+                                                urlString,
+                                              );
+                                              if (await canLaunchUrl(url)) {
+                                                await launchUrl(
+                                                  url,
+                                                  mode:
+                                                      LaunchMode
+                                                          .externalApplication,
+                                                );
+                                              }
+                                            },
+                                            child: Text(
+                                              S.t('manage_subscription'),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text("${S.t('error_prefix')} $e"),
+                                  ),
+                                );
+                              }
+                            } finally {
+                              if (mounted && isDialogLoading) {
+                                setDialogState(() => isDialogLoading = false);
+                              }
+                            }
+                          },
+                  child:
+                      isDialogLoading
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                          : Text(S.t('add')),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -158,6 +217,7 @@ class _JoinScreenState extends State<JoinScreen> {
               ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
                 child: Text(S.t('yes')),
               ),
             ],
@@ -166,14 +226,29 @@ class _JoinScreenState extends State<JoinScreen> {
 
     if (confirm != true || board.id == null) return;
 
+    setState(() => _isLoading = true);
+
     try {
+      // 1. Сповіщаємо сервер про вихід (Звільняємо ліміт)
+      try {
+        final api = BoardApiService();
+        await api.leaveBoard(board.id!);
+      } catch (e) {
+        logger.w("Could not leave board on server (offline?): $e");
+        // Продовжуємо видалення локально, навіть якщо сервер недоступний
+      }
+
+      // 2. Видаляємо локально
       await BoardStorage.deleteBoard(board.id!);
       await _loadBoards();
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text("${S.t('load_error')}: $e")));
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

@@ -14,7 +14,6 @@ class LoginRequest(BaseModel):
 class EmailRequest(BaseModel):
     email: EmailStr
 
-# --- НОВІ СХЕМИ ---
 class UpdateUserSchema(BaseModel):
     username: str
 
