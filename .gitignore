@@ -1,0 +1,54 @@
+# --- Flutter / Dart (Стандарт) ---
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+.pub-cache/
+.pub/
+
+# --- Файли IDE (щоб налаштування редактора не лізли в репозиторій) ---
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# --- Android ---
+android/local.properties
+android/.gradle
+android/app/build/
+android/app/release/
+android/key.properties
+# Якщо будуть помилки з R.java
+android/app/src/main/generated/
+
+# --- iOS / macOS ---
+ios/.generated/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Pods/
+macos/Pods/
+.DS_Store
+
+# --- Windows / Linux ---
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+
+# --- Python Backend (якщо він десь тут є або буде) ---
+__pycache__/
+*.pyc
+venv/
+env/
+.env
+
+# --- Твої архіви та бекапи (ДУЖЕ ВАЖЛИВО) ---
+# Бачу на скріні build.rar та lib.rar — таке в git пхати не можна!
+*.rar
+*.zip
+*.7z
+*.tar
+*.gz
+
+# --- Інше сміття ---
+*.log
+doc/api/
