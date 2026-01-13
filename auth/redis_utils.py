@@ -9,6 +9,7 @@ r = redis.Redis(
     decode_responses=True
 )
 
+# ===== Login attempts =====
 MAX_LOGIN_ATTEMPTS = 5
 ATTEMPT_RESET = 300  # сек
 
@@ -30,6 +31,7 @@ def reset_login_attempt(username: str):
     r.delete(f"login:{username}")
 
 
+# ===== Refresh tokens на пристроях =====
 def store_refresh_token(user_id: str, device_id: str, jti: str, expires_in: int):
     key = f"refresh:{user_id}:{device_id}"
     r.setex(key, timedelta(seconds=expires_in), jti)
@@ -43,6 +45,7 @@ def revoke_refresh_token(user_id: str, device_id: str):
     key = f"refresh:{user_id}:{device_id}"
     r.delete(key)
 
+# ===== Confirmation codes =====
 def store_code(email: str, code: int, expires_in: int = 300):
     """
     Зберігає код підтвердження в Redis з TTL

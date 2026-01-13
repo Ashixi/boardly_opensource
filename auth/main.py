@@ -4,14 +4,20 @@ from typing import Dict, List
 import json
 import uuid
 import asyncio
+  # Твої таблиці і клас моделі
 
+
+# Імпорти бази даних
+# from database import engine, Base
 import models 
 
+# Імпорти роутів
 from routes import auth_routes, boardroutes, user_routes
 from routes import payment_routes
 
 app = FastAPI()
 
+# 1. Налаштування CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 2. Створення таблиць (якщо немає)
+# Base.metadata.create_all(bind=engine)systemctl restart  ashixi.service
 
+# Підключення роутів
 app.include_router(auth_routes.router, prefix="/auth")
 app.include_router(user_routes.router, prefix="/user")
 app.include_router(payment_routes.router, prefix="/auth/payment")
@@ -31,10 +40,13 @@ app.include_router(boardroutes.router)
 
 
 
-
+# ==========================================
+# 3. WebSocket (WebRTC / Board Logic)
+# ==========================================
 
 class ConnectionManager:
     def __init__(self):
+        # Структура: {board_id: {peer_id: WebSocket}}
         self.rooms: Dict[str, Dict[str, WebSocket]] = {}
         self.lock = asyncio.Lock()
 
@@ -52,6 +64,7 @@ class ConnectionManager:
             self.rooms[board_id][peer_id] = websocket
             print(f"[CONNECT] Peer {peer_id} joined room {board_id}")
 
+        # Повідомляємо існуючих пірів про нового ("new-peer")
         message_new_peer = {"type": "new-peer", "from": peer_id}
         for ws in existing_peers_sockets:
             try:
@@ -59,6 +72,7 @@ class ConnectionManager:
             except Exception as e:
                 print(f"[ERROR] Failed to notify existing peer: {e}")
 
+        # Надсилаємо новому піру його ID та список існуючих ("connected")
         try:
             await websocket.send_json({
                 "type": "connected",
@@ -84,6 +98,7 @@ class ConnectionManager:
                 if not self.rooms[board_id]:
                     del self.rooms[board_id]
 
+        # Повідомляємо інших, що пір вийшов ("peer-left")
         message = {"type": "peer-left", "from": peer_id}
         for ws in peers_to_notify:
             try:
@@ -133,8 +148,10 @@ async def websocket_endpoint(websocket: WebSocket, board_id: str):
             to_peer_id = data.get("to")
             
             if to_peer_id:
+                # Особисті повідомлення (WebRTC signaling)
                 await manager.send_to_peer(board_id, to_peer_id, data)
             else:
+                # Бродкаст (малювання, курсори)
                 await manager.broadcast(board_id, data, exclude_peer=peer_id)
                 
     except WebSocketDisconnect:

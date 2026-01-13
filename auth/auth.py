@@ -12,6 +12,7 @@ def verify_password(password: str, hashed: str) -> bool:
     return pwd_context.verify(password, hashed)
 
 def create_access_token(user_id: str) -> str:
+    # Використовуйте datetime.utcnow() замість datetime.now()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_EXPIRE_MINUTES)
     payload = {
         "sub": user_id,

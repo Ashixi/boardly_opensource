@@ -25,9 +25,11 @@ def send_confirmation_email(to_email: str, code: str):
     
     server = None
     try:
-
+        # Встановлюємо timeout=15 секунд. 
+        # Якщо за цей час SMTP не відповість — вискочить помилка, але сервіс не зависне.
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
         
+        # Можна залишити 1 для логів під час відладки, або 0 для чистого логу
         server.set_debuglevel(0) 
         
         server.ehlo()
@@ -41,7 +43,8 @@ def send_confirmation_email(to_email: str, code: str):
         print(f"SUCCESS: Email sent successfully to {to_email}")
             
     except Exception as e:
-
+        # Оскільки це працює в BackgroundTasks, помилка виведеться в консоль/logdy,
+        # але користувач її не побачить і запит не впаде.
         print(f"ERROR: Failed to send email to {to_email}. Reason: {e}")
         
     finally:

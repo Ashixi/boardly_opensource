@@ -19,7 +19,7 @@ class UserInfo(Base):
     lemon_customer_id = Column(String, nullable=True)
     lemon_subscription_id = Column(String, nullable=True)
 
-    boards = relationship("Board", back_populates="owner", cascade="all, delete-orphan")
+    boards = relationship("Board", back_populates="owner")
 
 class Board(Base):
     __tablename__ = "boards"

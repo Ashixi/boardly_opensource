@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from database import get_db  # <-- ВИПРАВЛЕНО: імпорт з database, а не auth.dependencies
+from sqlalchemy.ext.asyncio import AsyncSession
+from auth.dependencies import get_db
 from models import UserInfo, Board
 from schemas import BoardCreate, BoardResponse
 from routes.user_routes import get_current_user
 from config import FREE_TIER_MAX_BOARDS
+
 
 router = APIRouter(prefix="/boards", tags=["Boards"])
 
