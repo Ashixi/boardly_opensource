@@ -25,4 +25,4 @@ This project is being actively developed as part of the **GitHub x Hack Club Fla
 This project is licensed under the **GNU GPL v3 License** — keeping open source open.
 
 ---
-*Built with ❤️ in Prague for the global student developer community.* [cite: 44, 60]
+*Built with ❤️ in Prague for the global student developer community.* 
