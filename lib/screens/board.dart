@@ -2540,32 +2540,59 @@ class CanvasBoardState extends State<CanvasBoard> {
   }
 
   Future<void> _openFile(BoardItem item) async {
+    if (_incomingFileWriters.containsKey(item.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⏳ Файл ще завантажується, зачекайте...'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+
     try {
       String targetPath = item.originalPath;
+      File? fileToOpen;
+
       if (await File(targetPath).exists()) {
-        await _launchFile(targetPath);
-        return;
-      }
-      if (widget.board?.id != null) {
+        fileToOpen = File(targetPath);
+      } else if (widget.board?.id != null) {
         final dirName = widget.board!.id!;
         final String boardFilesDir = await BoardStorage.getBoardFilesDirAuto(
           dirName,
         );
-
         final candidates = [
           p.join(boardFilesDir, item.fileName),
           p.join(boardFilesDir, item.id),
           p.join(boardFilesDir, '${item.id}_${item.fileName}'),
         ];
+
         for (final path in candidates) {
           if (await File(path).exists()) {
             _updateItemPath(item, path);
-            await _launchFile(path);
-            return;
+            fileToOpen = File(path);
+            break;
           }
         }
       }
-      _showErrorSnackbar('Файл не знайдено: ${item.fileName}');
+
+      if (fileToOpen == null) {
+        _showErrorSnackbar('Файл не знайдено: ${item.fileName}');
+        return;
+      }
+
+      final length = await fileToOpen.length();
+      if (length == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⏳ Файл обробляється системою, спробуйте ще раз.'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+        return;
+      }
+
+      await _launchFile(fileToOpen.path);
     } catch (e) {
       _showErrorSnackbar('Помилка відкриття: $e');
     }

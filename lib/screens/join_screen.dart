@@ -229,16 +229,13 @@ class _JoinScreenState extends State<JoinScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Сповіщаємо сервер про вихід (Звільняємо ліміт)
       try {
         final api = BoardApiService();
         await api.leaveBoard(board.id!);
       } catch (e) {
         logger.w("Could not leave board on server (offline?): $e");
-        // Продовжуємо видалення локально, навіть якщо сервер недоступний
       }
 
-      // 2. Видаляємо локально
       await BoardStorage.deleteBoard(board.id!);
       await _loadBoards();
     } catch (e) {
