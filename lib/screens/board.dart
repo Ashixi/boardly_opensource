@@ -1735,10 +1735,10 @@ class CanvasBoardState extends State<CanvasBoard> {
 
       widget.onBoardUpdated?.call(widget.board!);
 
-      try {
-        if (_isHost) {
-          widget.board!.isConnectionBoard = false;
-        }
+      // try {
+      //   if (_isHost) {
+      //     widget.board!.isConnectionBoard = false;
+      //   }
 
         logger.i("💾 Triggering delayed save...");
         await BoardStorage.saveBoard(widget.board!);

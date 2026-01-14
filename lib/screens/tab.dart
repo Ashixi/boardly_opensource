@@ -7,6 +7,7 @@ import 'package:boardly/data/board_storage.dart';
 import 'package:boardly/services/file_monitor_service.dart';
 import 'board.dart';
 import 'package:flutter/services.dart';
+import 'package:boardly/screens/start_screen.dart';
 
 class CanvasTabbedBoard extends StatefulWidget {
   final BoardModel initialBoard;
@@ -81,11 +82,12 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
     final mainBoard = _boards[0];
 
     final updatedItems =
-        mainBoard.items.where((item) => connection.itemIds.contains(item.id)).map((
-          item,
-        ) {
-          return item.copyWith();
-        }).toList();
+        mainBoard.items
+            .where((item) => connection.itemIds.contains(item.id))
+            .map((item) {
+              return item.copyWith();
+            })
+            .toList();
 
     setState(() {
       if (existingTabIndex != -1) {
@@ -139,12 +141,12 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
             (i) => i.id == updatedItem.id,
           );
           if (mainItemIndex != -1) {
-            mainBoard
-                .items[mainItemIndex] = mainBoard.items[mainItemIndex].copyWith(
-              position: updatedItem.position,
-              originalPath: updatedItem.originalPath,
-              path: updatedItem.path,
-            );
+            mainBoard.items[mainItemIndex] = mainBoard.items[mainItemIndex]
+                .copyWith(
+                  position: updatedItem.position,
+                  originalPath: updatedItem.originalPath,
+                  path: updatedItem.path,
+                );
           }
         }
 
@@ -170,9 +172,7 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
     if (!board.isConnectionBoard) {
       try {
         await BoardStorage.saveBoard(board);
-      } catch (e) {
-
-      }
+      } catch (e) {}
     }
   }
 
@@ -277,10 +277,18 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
           onPressed: () {
+            // 1. Розриваємо з'єднання перед виходом
             if (widget.webRTCManager != null) {
               widget.webRTCManager!.disconnect();
             }
-            Navigator.pop(context);
+
+            // 2. ПЕРЕХІД НА СТАРТОВИЙ ЕКРАН (Addboard)
+            // (route) => false означає "видалити всю історію переходів"
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const Addboard()),
+              (route) => false,
+            );
           },
         ),
         title: Text(
@@ -331,6 +339,7 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
               onPressed: _showBoardIdDialog,
             ),
         ],
+        // ... (bottom секція з табами залишається без змін)
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(60),
           child: Container(
@@ -386,10 +395,7 @@ class _TabLabel extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(right: 8),
       child: Material(
-        color:
-            isActive
-                ? const Color(0xFF009688)
-                : Colors.grey[100],
+        color: isActive ? const Color(0xFF009688) : Colors.grey[100],
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
@@ -402,10 +408,7 @@ class _TabLabel extends StatelessWidget {
                 Text(
                   board.title ?? 'Дошка',
                   style: TextStyle(
-                    color:
-                        isActive
-                            ? Colors.white
-                            : Colors.grey[700],
+                    color: isActive ? Colors.white : Colors.grey[700],
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                   ),
