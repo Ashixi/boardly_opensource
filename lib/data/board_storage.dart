@@ -201,7 +201,7 @@ class BoardStorage {
     if (board.id == null) return;
     try {
       if (isConnectedBoard) {
-        board.isJoined = true;
+        return;
       }
 
       final baseDir = await _getBoardsBaseDir();

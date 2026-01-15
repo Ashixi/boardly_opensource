@@ -718,9 +718,9 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
     final int limit = (_userData?.isPro == true) ? 100 : 4;
 
     _webRTCManager = WebRTCManager(
-      signalingServerUrl: 'ws://178.18.253.94:8000/ws',
+      signalingServerUrl: 'wss://api.boardly.studio/ws',
       maxPeers: limit,
-      boardId: '',
+      boardId: boardToHost.id ?? '', // 👈 обов’язково
     );
 
     _webRTCManager?.onLimitReached = () {
@@ -759,7 +759,7 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
 
   Future<void> _joinToBoard(String boardId, String boardTitle) async {
     _webRTCManager = WebRTCManager(
-      signalingServerUrl: 'ws://178.18.253.94:8000/ws',
+      signalingServerUrl: 'wss://api.boardly.studio/ws',
       boardId: boardId,
     );
     _webRTCManager?.onLimitReached = () {
