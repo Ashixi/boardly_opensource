@@ -3,13 +3,13 @@ import 'package:path/path.dart' as p;
 
 class BoardItem {
   final String id;
-  final String path; 
-  final String?
-  shortcutPath; 
-  final String originalPath; 
+  String path; // <--- Прибрали final
+  String? shortcutPath; // <--- Прибрали final
+  String originalPath; // <--- Прибрали final
   Offset position;
   final String type;
-  final List<String> tags;
+  List<String>
+  tags; // Можна також прибрати final, якщо плануєте змінювати список, хоча List сам по собі мутабельний
   String? notes;
 
   String? connectionId;

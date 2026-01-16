@@ -1387,7 +1387,9 @@ class CanvasBoardState extends State<CanvasBoard> {
 
   Future<void> _createFolderFromSelection() async {
     if (widget.board?.isConnectionBoard == true) {
-      _showErrorSnackbar("Вкладені папки заборонені!");
+      _showErrorSnackbar(
+        "Вкладені папки всередині вкладених папок наразі обмежені!",
+      );
       _safeSetState(() => _folderSelection.clear());
       return;
     }
@@ -1460,21 +1462,43 @@ class CanvasBoardState extends State<CanvasBoard> {
       return;
     }
 
-    final firstItem = _folderSelection.first;
-    final folderPos = firstItem.position;
+    try {
+      final dirName = widget.board!.id!;
+      final boardFilesDir = await BoardStorage.getBoardFilesDirAuto(dirName);
+      final newFolderPath = p.join(boardFilesDir, folderName);
 
-    final newFolder = Connection(
-      id: UniqueKey().toString(),
-      name: folderName,
-      itemIds: _folderSelection.map((i) => i.id).toList(),
-      boardId: widget.board!.id,
-      isCollapsed: true,
-      collapsedPosition: folderPos,
-      colorValue: pickedColor.value,
-    );
+      final directory = Directory(newFolderPath);
+      if (!await directory.exists()) {
+        await directory.create();
+      }
 
-    _safeSetState(() {
+      final firstItem = _folderSelection.first;
+      final folderPos = firstItem.position;
+
+      final newFolder = Connection(
+        id: UniqueKey().toString(),
+        name: folderName,
+        itemIds: _folderSelection.map((i) => i.id).toList(),
+        boardId: widget.board!.id,
+        isCollapsed: true,
+        collapsedPosition: folderPos,
+        colorValue: pickedColor.value,
+      );
+
       for (final item in _folderSelection) {
+        final oldFile = File(item.originalPath);
+        if (await oldFile.exists()) {
+          final newPath = p.join(newFolderPath, item.fileName);
+
+          _fileMonitorService?.ignoreNextChange(item.fileName);
+
+          await oldFile.rename(newPath);
+
+          item.originalPath = newPath;
+          item.path = newPath;
+          item.shortcutPath = newPath;
+        }
+
         if (item.connectionId != null) {
           final old = widget.board?.connections?.firstWhereOrNull(
             (c) => c.id == item.connectionId,
@@ -1484,15 +1508,31 @@ class CanvasBoardState extends State<CanvasBoard> {
         item.connectionId = newFolder.id;
       }
 
-      widget.board?.connections ??= [];
-      widget.board!.connections!.add(newFolder);
+      _safeSetState(() {
+        widget.board?.connections ??= [];
+        widget.board!.connections!.add(newFolder);
+        _folderSelection.clear();
+      });
 
-      _folderSelection.clear();
-    });
-
-    _saveBoard();
+      await _saveBoard();
+    } catch (e) {
+      logger.e("Помилка створення реальної папки: $e");
+      _showErrorSnackbar("Не вдалося створити папку на диску: $e");
+    }
   }
 
+  Future<String> _getCurrentFilesDir() async {
+    if (items.isNotEmpty) {
+      final firstFile = items.first;
+      final detectedDir = p.dirname(firstFile.originalPath);
+
+      if (await Directory(detectedDir).exists()) {
+        return detectedDir;
+      }
+    }
+
+    return await BoardStorage.getBoardFilesDirAuto(widget.board!.id!);
+  }
   // void _createVisualLinksFromSelection() {
   //   _safeSetState(() {
   //     widget.board?.links ??= [];
@@ -1623,39 +1663,37 @@ class CanvasBoardState extends State<CanvasBoard> {
 
     if (widget.board?.id == null) return;
 
-    // БЛОКУВАННЯ
     _locallyProcessingFiles.add(fullFileName.toLowerCase());
     _fileMonitorService?.ignoreNextChange(fullFileName);
 
     try {
-      final dirName = widget.board!.id!;
-      final boardFilesDir = await BoardStorage.getBoardFilesDirAuto(dirName);
-      String filePath = p.join(boardFilesDir, fullFileName);
+      final currentDir = await _getCurrentFilesDir();
+      String filePath = p.join(currentDir, fullFileName);
+
+      // Переконуємось, що папка існує
+      final dir = io.Directory(currentDir);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
 
       int counter = 1;
-      while (await File(filePath).exists()) {
-        filePath = p.join(boardFilesDir, '${name}_$counter.$ext');
+      while (await io.File(filePath).exists()) {
+        filePath = p.join(currentDir, '${name}_$counter.$ext');
         counter++;
       }
 
       final finalFileName = p.basename(filePath);
-
-      // Якщо ім'я змінилось через лічильник, блокуємо і його
       if (finalFileName != fullFileName) {
         _locallyProcessingFiles.add(finalFileName.toLowerCase());
         _fileMonitorService?.ignoreNextChange(finalFileName);
       }
 
-      final file = File(filePath);
+      final file = io.File(filePath);
       await file.create();
 
-      Offset centerPos = const Offset(100, 100);
+      Offset centerPos = _canvasCenter();
       if (_canvasSize != null) {
-        final centerScreen = Offset(
-          _canvasSize!.width / 2,
-          _canvasSize!.height / 2,
-        );
-        centerPos = (centerScreen - offset) / scale;
+        centerPos = (_canvasCenter() - offset) / scale;
         centerPos += Offset(items.length * 20.0, items.length * 20.0);
       }
 
@@ -1667,6 +1705,7 @@ class CanvasBoardState extends State<CanvasBoard> {
         position: centerPos,
         type: ext.toLowerCase(),
         fileName: finalFileName,
+        connectionId: _isNestedFolder ? widget.board?.id : null,
       );
 
       _safeSetState(() => items.add(newItem));
@@ -1676,7 +1715,6 @@ class CanvasBoardState extends State<CanvasBoard> {
     } catch (e) {
       _showErrorSnackbar("Помилка створення файлу: $e");
     } finally {
-      // Знімаємо блок
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) _locallyProcessingFiles.remove(fullFileName.toLowerCase());
       });
@@ -1721,6 +1759,48 @@ class CanvasBoardState extends State<CanvasBoard> {
       widget.board!.items = List.from(items);
       widget.board!.connections ??= [];
       widget.onBoardUpdated?.call(widget.board!);
+
+      try {
+        if (items.isEmpty) return;
+
+        final allBoards = await BoardStorage.getBoards();
+        BoardModel? rootBoard;
+
+        final testPath = items.first.originalPath;
+
+        for (final b in allBoards) {
+          if (b.id == null) continue;
+          final boardDir = await BoardStorage.getBoardDir(b.id!);
+
+          if (p.isWithin(boardDir, testPath)) {
+            rootBoard = b;
+            break;
+          }
+        }
+
+        if (rootBoard == null) {
+          logger.w("⚠️ Не вдалося знайти головну дошку для шляху: $testPath");
+          return;
+        }
+
+        final folderId = widget.board!.id;
+
+        rootBoard.items.removeWhere((i) => i.connectionId == folderId);
+
+        final updatedItems =
+            items.map((i) {
+              return i.copyWith(connectionId: folderId);
+            }).toList();
+
+        rootBoard.items.addAll(updatedItems);
+
+        await BoardStorage.saveBoard(rootBoard);
+        logger.i(
+          "✅ Вкладена дошка збережена в: ${rootBoard.title} (ID: ${rootBoard.id})",
+        );
+      } catch (e) {
+        logger.e("❌ Помилка збереження вкладеної дошки: $e");
+      }
       return;
     }
 
@@ -1736,10 +1816,6 @@ class CanvasBoardState extends State<CanvasBoard> {
       widget.onBoardUpdated?.call(widget.board!);
 
       try {
-        // if (_isHost) {
-        //   // widget.board!.isConnectionBoard = false;
-        // }
-
         logger.i("💾 Triggering delayed save...");
         await BoardStorage.saveBoard(widget.board!);
 
@@ -1835,7 +1911,7 @@ class CanvasBoardState extends State<CanvasBoard> {
                     onPressed: () => Navigator.pop(context),
                     child: Text(S.t('close')),
                   ),
-                ], //
+                ],
               );
             },
           ),
@@ -1848,13 +1924,14 @@ class CanvasBoardState extends State<CanvasBoard> {
         allowMultiple: true,
         withData: false,
       );
+
       if (result != null && result.paths.isNotEmpty) {
         if (widget.board?.id == null) return;
         List<BoardItem> newItems = [];
-        final dirName = widget.board!.id!;
 
-        final boardFilesDir = await BoardStorage.getBoardFilesDirAuto(dirName);
-        await Directory(boardFilesDir).create(recursive: true);
+        // --- ЗМІНА 1: Отримуємо правильну поточну директорію ---
+        final currentDir = await _getCurrentFilesDir();
+        await Directory(currentDir).create(recursive: true);
 
         for (String? originalPath in result.paths) {
           if (originalPath != null && originalPath.isNotEmpty) {
@@ -1866,12 +1943,13 @@ class CanvasBoardState extends State<CanvasBoard> {
             final nameNoExt = p.basenameWithoutExtension(fileName);
 
             String finalFileName = fileName;
-            String destinationPath = p.join(boardFilesDir, finalFileName);
+            // --- ЗМІНА 2: Використовуємо currentDir для формування шляху ---
+            String destinationPath = p.join(currentDir, finalFileName);
             int counter = 1;
 
             while (await File(destinationPath).exists()) {
               finalFileName = '${nameNoExt}_$counter$ext';
-              destinationPath = p.join(boardFilesDir, finalFileName);
+              destinationPath = p.join(currentDir, finalFileName);
               counter++;
             }
 
@@ -1882,6 +1960,7 @@ class CanvasBoardState extends State<CanvasBoard> {
               await file.copy(destinationPath);
 
               final fileType = ext.replaceFirst('.', '').toLowerCase();
+
               final newItem = BoardItem(
                 id: UniqueKey().toString(),
                 path: destinationPath,
@@ -1893,7 +1972,10 @@ class CanvasBoardState extends State<CanvasBoard> {
                 ),
                 type: fileType,
                 fileName: finalFileName,
+                // --- ЗМІНА 3: Прив'язуємо до ID папки, якщо ми всередині неї ---
+                connectionId: _isNestedFolder ? widget.board?.id : null,
               );
+
               newItems.add(newItem);
               _broadcastItemAdd(item: newItem);
               _streamFileToPeers(newItem, destinationPath);
@@ -3554,7 +3636,8 @@ class CanvasBoardState extends State<CanvasBoard> {
     final scenePos = _localToItemSpace(localPos);
     List<BoardItem> newItems = [];
 
-    final dirName = widget.board!.id!;
+    final currentDir = await _getCurrentFilesDir();
+
     for (var i = 0; i < files.length; i++) {
       final file = files[i];
       final originalPath = file.path;
@@ -3563,9 +3646,13 @@ class CanvasBoardState extends State<CanvasBoard> {
 
       final fileName = p.basename(originalPath);
 
+      // Перевірка дублікатів
       final fileAlreadyAdded = items.any(
-        (item) => item.originalPath == originalPath,
+        (item) =>
+            item.originalPath == originalPath ||
+            p.basename(item.originalPath) == fileName,
       );
+
       if (fileAlreadyAdded) {
         final shouldAdd = await _confirmAddDuplicate(fileName);
         if (!shouldAdd) continue;
@@ -3575,29 +3662,37 @@ class CanvasBoardState extends State<CanvasBoard> {
       _fileMonitorService?.ignoreNextChange(fileName);
 
       try {
-        final internalPath = await BoardStorage.addFileToBoard(
-          originalPath,
-          dirName,
-          isConnectedBoard: !_isHost,
-        );
+        final dir = io.Directory(currentDir);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
 
-        final finalFileName = p.basename(internalPath);
+        String destinationPath = p.join(currentDir, fileName);
+
+        final nameNoExt = p.basenameWithoutExtension(fileName);
+        final ext = p.extension(fileName);
+        int counter = 1;
+        while (await io.File(destinationPath).exists()) {
+          destinationPath = p.join(currentDir, '${nameNoExt}_$counter$ext');
+          counter++;
+        }
+
+        await io.File(originalPath).copy(destinationPath);
+
+        final finalFileName = p.basename(destinationPath);
+
         if (finalFileName != fileName) {
           _locallyProcessingFiles.add(finalFileName.toLowerCase());
           _fileMonitorService?.ignoreNextChange(finalFileName);
         }
 
-        final shortcutPath = internalPath;
-
         String itemType = 'file';
         final entityType = io.FileSystemEntity.typeSync(originalPath);
-
         if (entityType == io.FileSystemEntityType.file) {
-          itemType = originalPath.split('.').last.toLowerCase();
+          itemType =
+              p.extension(destinationPath).replaceFirst('.', '').toLowerCase();
         } else if (entityType == io.FileSystemEntityType.directory) {
           itemType = 'folder';
-        } else {
-          continue;
         }
 
         final positionOffset = Offset(
@@ -3606,25 +3701,27 @@ class CanvasBoardState extends State<CanvasBoard> {
         );
 
         final newItem = BoardItem(
-          path: shortcutPath,
-          shortcutPath: shortcutPath,
-          originalPath: internalPath,
+          id: UniqueKey().toString(),
+          path: destinationPath,
+          shortcutPath: destinationPath,
+          originalPath: destinationPath,
           position: scenePos + positionOffset,
           type: itemType,
           fileName: finalFileName,
-          id: UniqueKey().toString(),
+          connectionId: _isNestedFolder ? widget.board?.id : null,
         );
-        newItems.add(newItem);
 
+        newItems.add(newItem);
         _broadcastItemAdd(item: newItem);
 
         if (itemType != 'folder') {
-          _streamFileToPeers(newItem, internalPath);
+          _streamFileToPeers(newItem, destinationPath);
         }
       } catch (e) {
         logger.e("Error adding file via drop: $e");
+        _showErrorSnackbar("Помилка додавання файлу: $e");
       } finally {
-        Future.delayed(const Duration(seconds: 5), () {
+        Future.delayed(const Duration(seconds: 3), () {
           if (mounted) {
             _locallyProcessingFiles.remove(fileName.toLowerCase());
           }

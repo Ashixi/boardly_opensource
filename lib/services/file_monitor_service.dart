@@ -47,8 +47,8 @@ class FileMonitorService {
                 FileSystemEvent.modify |
                 FileSystemEvent.create |
                 FileSystemEvent.move |
-                FileSystemEvent.delete, 
-            recursive: false,
+                FileSystemEvent.delete,
+            recursive: true,
           )
           .listen((event) {
             _handleFileSystemEvent(event);
