@@ -9,7 +9,6 @@ import 'package:boardly/screens/tab.dart';
 import 'package:boardly/services/board_api_service.dart';
 import 'package:boardly/web_rtc/rtc.dart';
 import 'package:flutter/material.dart';
-import 'package:boardly/widgets/board_card.dart';
 import 'package:boardly/services/localization.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
@@ -17,13 +16,10 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 
-import 'package:boardly/screens/payment_dialog.dart';
-
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
 
-import 'package:uuid/uuid.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:boardly/widgets/policy_dialog.dart';

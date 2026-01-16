@@ -31,14 +31,11 @@ class BoardStorage {
     }
 
     _cachedRootPath = defaultPath;
-
-    logger.i('Using default storage path: $defaultPath');
     return defaultPath;
   }
 
   static Future<void> setRootPath(String newPath) async {
     final prefs = await SharedPreferences.getInstance();
-
     final boardyPath = path.join(newPath, 'Boardly');
 
     if (!await Directory(boardyPath).exists()) {
@@ -47,7 +44,6 @@ class BoardStorage {
 
     await prefs.setString(_rootPathKey, boardyPath);
     _cachedRootPath = boardyPath;
-
     await _createDirectoryStructureIfNeeded();
     logger.i('User selected new root path: $boardyPath');
   }
@@ -66,30 +62,49 @@ class BoardStorage {
     return dir.path;
   }
 
-  static Future<String> getBoardDir(
-    String boardId, {
-    bool isConnected = false,
-  }) async {
+  // --- ЛОГІКА ПОШУКУ (Оновлена) ---
+  static Future<String?> _findExistingBoardPath(String boardId) async {
     final baseDir = await _getBoardsBaseDir();
     final dir = Directory(baseDir);
 
     if (await dir.exists()) {
       await for (var entity in dir.list()) {
         if (entity is Directory) {
+          final folderName = path.basename(entity.path);
+
+          // 1. НАЙШВИДШИЙ СПОСІБ: Перевіряємо, чи папка закінчується на цей ID
+          // Це знайде і "Проект_340e...", і просто "340e..."
+          if (folderName.endsWith(boardId)) {
+            return entity.path;
+          }
+
+          // 2. РЕЗЕРВНИЙ СПОСІБ: Якщо раптом назва зовсім інша, читаємо meta.json
+          // Це для сумісності зі старими папками, якщо вони залишаться
           final metaFile = File(path.join(entity.path, 'meta.json'));
           if (await metaFile.exists()) {
             try {
               final content = await metaFile.readAsString();
               final json = jsonDecode(content);
               if (json['id'] == boardId) {
-                return entity.path; // Знайшли папку!
+                return entity.path;
               }
             } catch (_) {}
           }
         }
       }
     }
+    return null;
+  }
 
+  static Future<String> getBoardDir(
+    String boardId, {
+    bool isConnected = false,
+  }) async {
+    String? existingPath = await _findExistingBoardPath(boardId);
+    if (existingPath != null) return existingPath;
+
+    // Якщо папки немає, повертаємо шлях за замовчуванням (щоб не крашилось)
+    final baseDir = await _getBoardsBaseDir();
     return path.join(baseDir, boardId);
   }
 
@@ -107,125 +122,48 @@ class BoardStorage {
     return getBoardFilesDir(boardId);
   }
 
-  static Future<String> createEmptyFile(
-    String fileNameWithExtension,
-    String boardId, {
-    bool isConnectedBoard = false,
-    String initialContent = '',
-  }) async {
-    try {
-      final filesDir = await getBoardFilesDir(boardId);
-      final fileName = path.basename(fileNameWithExtension);
-      String newPath = path.join(filesDir, fileName);
-
-      int counter = 1;
-      while (await File(newPath).exists()) {
-        final nameWithoutExt = path.basenameWithoutExtension(fileName);
-        final ext = path.extension(fileName);
-        newPath = path.join(filesDir, '${nameWithoutExt}_$counter$ext');
-        counter++;
-      }
-
-      final newFile = File(newPath);
-      await newFile.writeAsString(initialContent);
-
-      logger.i('Empty file created at: $newPath');
-      return newPath;
-    } catch (e) {
-      logger.e('Error creating empty file: $e');
-      rethrow;
-    }
-  }
-
-  static Future<String> addFileToBoard(
-    String originalFilePath,
-    String boardId, {
-    bool isConnectedBoard = false,
-  }) async {
-    try {
-      final filesDir = await getBoardFilesDir(boardId);
-      final fileName = path.basename(originalFilePath);
-      String newPath = path.join(filesDir, fileName);
-
-      int counter = 1;
-      while (await File(newPath).exists()) {
-        final nameWithoutExt = path.basenameWithoutExtension(fileName);
-        final ext = path.extension(fileName);
-        newPath = path.join(filesDir, '${nameWithoutExt}_$counter$ext');
-        counter++;
-      }
-
-      await File(originalFilePath).copy(newPath);
-      logger.i('File copied to: $newPath');
-      return newPath;
-    } catch (e) {
-      logger.e('Error copying file: $e');
-      rethrow;
-    }
-  }
-
-  static String _sanitizeFolderName(String name) {
-    return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
-  }
-
+  // --- ЗБЕРЕЖЕННЯ (Формат: Назва_ID) ---
   static Future<void> saveBoard(
     BoardModel board, {
     bool isConnectedBoard = false,
   }) async {
     if (board.id == null) return;
-    try {
-      if (isConnectedBoard) {
-        return;
-      }
 
+    if (isConnectedBoard ||
+        board.isConnectionBoard ||
+        board.id!.startsWith('[#')) {
+      return;
+    }
+
+    try {
       final baseDir = await _getBoardsBaseDir();
 
-      String safeTitle = _sanitizeFolderName(board.title ?? "Untitled Board");
-      if (safeTitle.isEmpty) safeTitle = "Untitled Board";
-
-      String currentPath = await getBoardDir(board.id!);
-      bool exists = await Directory(currentPath).exists();
-
+      // 1. Шукаємо папку
+      String? currentPath = await _findExistingBoardPath(board.id!);
       String targetPath;
 
-      if (exists) {
-        final currentDirName = path.basename(currentPath);
-
-        if (currentDirName != safeTitle) {
-          String newPathCandidate = path.join(baseDir, safeTitle);
-          int counter = 1;
-          while (await Directory(newPathCandidate).exists() &&
-              newPathCandidate != currentPath) {
-            newPathCandidate = path.join(baseDir, '$safeTitle ($counter)');
-            counter++;
-          }
-          try {
-            await Directory(currentPath).rename(newPathCandidate);
-            targetPath = newPathCandidate;
-            logger.i("Renamed board folder to: $targetPath");
-          } catch (e) {
-            logger.e("Failed to rename folder: $e");
-            targetPath = currentPath;
-          }
-        } else {
-          targetPath = currentPath;
-        }
+      if (currentPath != null) {
+        // Папка вже є -> використовуємо її (навіть якщо назва дошки змінилась)
+        targetPath = currentPath;
       } else {
-        String newPathCandidate = path.join(baseDir, safeTitle);
-        int counter = 1;
-        while (await Directory(newPathCandidate).exists()) {
-          newPathCandidate = path.join(baseDir, '$safeTitle ($counter)');
-          counter++;
-        }
-        await Directory(newPathCandidate).create(recursive: true);
-        targetPath = newPathCandidate;
+        // Папки немає -> Створюємо нову з форматом "Назва_ID"
+
+        String safeTitle = _sanitizeFolderName(board.title ?? "Board");
+        if (safeTitle.isEmpty) safeTitle = "Board";
+
+        // 🔥 ФОРМУЛА: Назва + "_" + ID
+        // Це гарантує унікальність без дужок (1), (2)
+        String folderName = "${safeTitle}_${board.id}";
+
+        targetPath = path.join(baseDir, folderName);
+
+        await Directory(targetPath).create(recursive: true);
+        logger.i("Створено нову папку: $targetPath");
       }
 
+      // 2. Запис meta.json (Стандартний безпечний метод)
       final metaFilePath = path.join(targetPath, 'meta.json');
-      final tempFilePath = path.join(
-        targetPath,
-        'meta.json.tmp',
-      ); // Тимчасовий файл
+      final tempFilePath = path.join(targetPath, 'meta.json.tmp');
       final tempFile = File(tempFilePath);
       final metaFile = File(metaFilePath);
 
@@ -233,30 +171,33 @@ class BoardStorage {
 
       await tempFile.writeAsString(jsonData, flush: true);
 
-      if (await metaFile.exists()) {
+      int attempts = 0;
+      while (attempts < 5) {
         try {
-          await metaFile.delete();
+          if (await metaFile.exists()) {
+            await metaFile.delete();
+          }
+          await tempFile.rename(metaFilePath);
+          break;
         } catch (e) {
-          logger.w("Warning deleting old meta.json: $e");
+          attempts++;
+          await Future.delayed(Duration(milliseconds: 200 * attempts));
         }
       }
 
-      await tempFile.rename(metaFilePath);
+      if (await tempFile.exists()) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
     } catch (e) {
       logger.e('Error saving board: $e');
-      rethrow;
     }
   }
 
-  static Future<List<BoardModel>> getBoards() => loadAllBoards();
-
-  static Future<BoardModel?> getBoard(String id) async {
-    final boards = await loadAllBoards();
-    try {
-      return boards.firstWhere((b) => b.id == id);
-    } catch (_) {
-      return null;
-    }
+  static String _sanitizeFolderName(String name) {
+    // Залишаємо тільки букви, цифри та пробіли. Замінюємо все інше на підкреслення.
+    return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '').trim();
   }
 
   static Future<List<BoardModel>> loadAllBoards() async {
@@ -300,6 +241,54 @@ class BoardStorage {
       }
     } catch (e) {
       logger.e('Error deleting board: $e');
+      rethrow;
+    }
+  }
+
+  static Future<String> createEmptyFile(
+    String fileNameWithExtension,
+    String boardId, {
+    bool isConnectedBoard = false,
+    String initialContent = '',
+  }) async {
+    try {
+      final filesDir = await getBoardFilesDir(boardId);
+      final fileName = path.basename(fileNameWithExtension);
+      String newPath = path.join(filesDir, fileName);
+      int counter = 1;
+      while (await File(newPath).exists()) {
+        final nameWithoutExt = path.basenameWithoutExtension(fileName);
+        final ext = path.extension(fileName);
+        newPath = path.join(filesDir, '${nameWithoutExt}_$counter$ext');
+        counter++;
+      }
+      final newFile = File(newPath);
+      await newFile.writeAsString(initialContent);
+      return newPath;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  static Future<String> addFileToBoard(
+    String originalFilePath,
+    String boardId, {
+    bool isConnectedBoard = false,
+  }) async {
+    try {
+      final filesDir = await getBoardFilesDir(boardId);
+      final fileName = path.basename(originalFilePath);
+      String newPath = path.join(filesDir, fileName);
+      int counter = 1;
+      while (await File(newPath).exists()) {
+        final nameWithoutExt = path.basenameWithoutExtension(fileName);
+        final ext = path.extension(fileName);
+        newPath = path.join(filesDir, '${nameWithoutExt}_$counter$ext');
+        counter++;
+      }
+      await File(originalFilePath).copy(newPath);
+      return newPath;
+    } catch (e) {
       rethrow;
     }
   }

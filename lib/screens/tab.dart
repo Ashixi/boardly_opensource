@@ -75,12 +75,14 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
   }
 
   void _addConnectionBoard(Connection connection) {
+    // Шукаємо, чи вже відкрита ця папка
     final existingTabIndex = _boards.indexWhere(
       (b) => b.isConnectionBoard && b.connectionId == connection.id,
     );
 
     final mainBoard = _boards[0];
 
+    // Відфільтровуємо елементи, які належать цій папці
     final updatedItems =
         mainBoard.items
             .where((item) => connection.itemIds.contains(item.id))
@@ -91,9 +93,10 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
 
     setState(() {
       if (existingTabIndex != -1) {
+        // Оновлюємо існуючу вкладку
         final existingBoard = _boards[existingTabIndex];
         _boards[existingTabIndex] = BoardModel(
-          id: existingBoard.id,
+          id: connection.id, // ВАЖЛИВО: ID дошки = ID з'єднання
           title: connection.name,
           items: updatedItems,
           isConnectionBoard: true,
@@ -102,9 +105,10 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         );
         _currentTabIndex = existingTabIndex;
       } else {
+        // Створюємо нову вкладку
         _boards.add(
           BoardModel(
-            id: UniqueKey().toString(),
+            id: connection.id, // ВАЖЛИВО: ID дошки = ID з'єднання
             title: connection.name,
             items: updatedItems,
             isConnectionBoard: true,
@@ -125,8 +129,11 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
       }
     });
 
+    // Якщо це вкладена дошка
     if (updatedBoard.isConnectionBoard && updatedBoard.connectionId != null) {
       final mainBoard = _boards[0];
+
+      // Знаходимо саме з'єднання (папку) на головній дошці
       final connIndex = mainBoard.connections?.indexWhere(
         (c) => c.id == updatedBoard.connectionId,
       );
@@ -134,25 +141,48 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
       if (connIndex != null && connIndex != -1) {
         final connection = mainBoard.connections![connIndex];
 
+        // 1. Оновлюємо стрілки всередині папки
         connection.links = updatedBoard.links ?? [];
+
+        // 2. Оновлюємо список ID, які належать папці
+        connection.itemIds = updatedBoard.items.map((e) => e.id).toList();
 
         for (final updatedItem in updatedBoard.items) {
           final mainItemIndex = mainBoard.items.indexWhere(
             (i) => i.id == updatedItem.id,
           );
+
           if (mainItemIndex != -1) {
-            mainBoard.items[mainItemIndex] = mainBoard.items[mainItemIndex]
-                .copyWith(
-                  position: updatedItem.position,
-                  originalPath: updatedItem.originalPath,
-                  path: updatedItem.path,
-                );
+            // Оновлюємо існуючий елемент
+            mainBoard
+                .items[mainItemIndex] = mainBoard.items[mainItemIndex].copyWith(
+              position: updatedItem.position,
+              originalPath:
+                  updatedItem
+                      .originalPath, // Шлях не міняємо, якщо він вже був правильний
+              path: updatedItem.path,
+              connectionId: updatedBoard.connectionId,
+              tags: updatedItem.tags,
+              notes: updatedItem.notes,
+            );
+          } else {
+            // --- FIX: Додавання нового файлу з вкладеної дошки ---
+            // Новий файл приходить з updatedItem.
+            // Оскільки ми заблокували збереження nested-дошок, файл фізично може ще не бути переміщений.
+            // Але головне тут - додати його в items головної дошки з правильним connectionId.
+
+            final newItem = updatedItem.copyWith(
+              connectionId: updatedBoard.connectionId,
+            );
+            mainBoard.items.add(newItem);
           }
         }
 
+        // Зберігаємо ТІЛЬКИ головну дошку
         _saveBoard(mainBoard);
       }
     } else {
+      // Це головна дошка
       _saveBoard(updatedBoard);
     }
   }

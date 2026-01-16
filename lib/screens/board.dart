@@ -8,7 +8,6 @@ import 'package:boardly/models/board_items.dart';
 import 'package:boardly/models/board_model.dart';
 import 'package:boardly/models/connection_model.dart';
 import 'package:boardly/screens/board_painter.dart';
-import 'package:boardly/screens/payment_dialog.dart';
 import 'package:boardly/screens/start_screen.dart';
 import 'package:boardly/services/file_monitor_service.dart';
 import 'package:boardly/services/localization.dart';
@@ -127,6 +126,7 @@ class CanvasBoardState extends State<CanvasBoard> {
       if (widget.onOpenConnectionBoard != null) {
         widget.board!.isConnectionBoard = false;
       }
+      _syncOrphanFiles();
     }
     _isMounted = true;
 
@@ -1079,8 +1079,6 @@ class CanvasBoardState extends State<CanvasBoard> {
         _pendingUpdates[moveDestination] = tempFilePath;
       }
 
-      // --- ОНОВЛЕННЯ ІНТЕРФЕЙСУ (UI) ---
-
       if (isConflict) {
         final newId = UniqueKey().toString();
         final newItem = BoardItem(
@@ -1751,55 +1749,11 @@ class CanvasBoardState extends State<CanvasBoard> {
   }
 
   Future<void> _saveBoard() async {
-    final bool isRealNestedFolder =
-        widget.board?.isConnectionBoard == true &&
-        widget.onBoardUpdated != null;
-
-    if (isRealNestedFolder) {
-      widget.board!.items = List.from(items);
-      widget.board!.connections ??= [];
-      widget.onBoardUpdated?.call(widget.board!);
-
-      try {
-        if (items.isEmpty) return;
-
-        final allBoards = await BoardStorage.getBoards();
-        BoardModel? rootBoard;
-
-        final testPath = items.first.originalPath;
-
-        for (final b in allBoards) {
-          if (b.id == null) continue;
-          final boardDir = await BoardStorage.getBoardDir(b.id!);
-
-          if (p.isWithin(boardDir, testPath)) {
-            rootBoard = b;
-            break;
-          }
-        }
-
-        if (rootBoard == null) {
-          logger.w("⚠️ Не вдалося знайти головну дошку для шляху: $testPath");
-          return;
-        }
-
-        final folderId = widget.board!.id;
-
-        rootBoard.items.removeWhere((i) => i.connectionId == folderId);
-
-        final updatedItems =
-            items.map((i) {
-              return i.copyWith(connectionId: folderId);
-            }).toList();
-
-        rootBoard.items.addAll(updatedItems);
-
-        await BoardStorage.saveBoard(rootBoard);
-        logger.i(
-          "✅ Вкладена дошка збережена в: ${rootBoard.title} (ID: ${rootBoard.id})",
-        );
-      } catch (e) {
-        logger.e("❌ Помилка збереження вкладеної дошки: $e");
+    if (_isNestedFolder || (widget.board?.isConnectionBoard == true)) {
+      if (widget.board != null) {
+        widget.board!.items = List.from(items);
+        widget.board!.connections ??= [];
+        widget.onBoardUpdated?.call(widget.board!);
       }
       return;
     }
@@ -1807,16 +1761,16 @@ class CanvasBoardState extends State<CanvasBoard> {
     _saveDebounceTimer?.cancel();
 
     _saveDebounceTimer = Timer(const Duration(seconds: 1), () async {
-      if (!mounted) return;
-      if (widget.board == null) return;
-
-      widget.board!.items = List.from(items);
-      widget.board!.connections ??= [];
-
-      widget.onBoardUpdated?.call(widget.board!);
+      if (!mounted || widget.board == null) return;
 
       try {
-        logger.i("💾 Triggering delayed save...");
+        logger.i("💾 Збереження головної дошки після паузи...");
+
+        widget.board!.items = List.from(items);
+        widget.board!.connections ??= [];
+
+        widget.onBoardUpdated?.call(widget.board!);
+
         await BoardStorage.saveBoard(widget.board!);
 
         if (widget.webRTCManager != null) {
@@ -1830,7 +1784,7 @@ class CanvasBoardState extends State<CanvasBoard> {
           }
         }
       } catch (e) {
-        logger.e("Error in delayed save: $e");
+        logger.e("Помилка при відкладеному збереженні: $e");
       }
     });
   }
@@ -1918,6 +1872,81 @@ class CanvasBoardState extends State<CanvasBoard> {
     );
   }
 
+  Future<void> _syncOrphanFiles() async {
+    if (widget.board?.id == null) return;
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+
+    try {
+      String filesDir;
+      if (_isNestedFolder) {
+        filesDir = await BoardStorage.getBoardFilesDirAuto(widget.board!.id!);
+      } else {
+        filesDir = await BoardStorage.getBoardFilesDirAuto(widget.board!.id!);
+      }
+
+      final dir = Directory(filesDir);
+      if (!await dir.exists()) return;
+
+      List<BoardItem> restoredItems = [];
+
+      await for (var entity in dir.list()) {
+        if (entity is File) {
+          final fileName = p.basename(entity.path);
+          if (fileName.startsWith('.')) continue;
+
+          final exists = items.any(
+            (i) =>
+                i.fileName == fileName ||
+                p.basename(i.originalPath) == fileName,
+          );
+
+          if (!exists) {
+            logger.i("🛠️ Found orphan file: $fileName. Restoring...");
+
+            final ext = p.extension(fileName).replaceAll('.', '').toLowerCase();
+
+            String? connId = _isNestedFolder ? widget.board?.id : null;
+
+            restoredItems.add(
+              BoardItem(
+                id: UniqueKey().toString(),
+                path: entity.path,
+                shortcutPath: entity.path,
+                originalPath: entity.path,
+                position: Offset(
+                  150.0 + (restoredItems.length * 30),
+                  150.0 + (restoredItems.length * 30),
+                ),
+                type: ext.isEmpty ? 'file' : ext,
+                fileName: fileName,
+                connectionId: connId,
+              ),
+            );
+          }
+        }
+      }
+
+      if (restoredItems.isNotEmpty) {
+        _safeSetState(() {
+          items.addAll(restoredItems);
+        });
+        _saveBoard();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Відновлено ${restoredItems.length} файлів"),
+            duration: const Duration(seconds: 3),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      logger.e("Error syncing orphan files: $e");
+    }
+  }
+
   void _pickFiles() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -1929,7 +1958,6 @@ class CanvasBoardState extends State<CanvasBoard> {
         if (widget.board?.id == null) return;
         List<BoardItem> newItems = [];
 
-        // --- ЗМІНА 1: Отримуємо правильну поточну директорію ---
         final currentDir = await _getCurrentFilesDir();
         await Directory(currentDir).create(recursive: true);
 
@@ -1943,7 +1971,6 @@ class CanvasBoardState extends State<CanvasBoard> {
             final nameNoExt = p.basenameWithoutExtension(fileName);
 
             String finalFileName = fileName;
-            // --- ЗМІНА 2: Використовуємо currentDir для формування шляху ---
             String destinationPath = p.join(currentDir, finalFileName);
             int counter = 1;
 
@@ -1972,7 +1999,6 @@ class CanvasBoardState extends State<CanvasBoard> {
                 ),
                 type: fileType,
                 fileName: finalFileName,
-                // --- ЗМІНА 3: Прив'язуємо до ID папки, якщо ми всередині неї ---
                 connectionId: _isNestedFolder ? widget.board?.id : null,
               );
 

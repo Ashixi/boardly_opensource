@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:boardly/screens/start_screen.dart';
-import 'package:http/http.dart' as http;
 import 'package:boardly/logger.dart';
 
 class BoardLimitException implements Exception {
