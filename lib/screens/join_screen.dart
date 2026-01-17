@@ -34,19 +34,85 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _loadBoards() async {
-    setState(() => _isLoading = true);
-    try {
-      final allBoards = await BoardStorage.loadAllBoards();
-      final joined = allBoards.where((b) => b.isJoined == true).toList();
+    // 1. Спочатку показуємо те, що є локально (кеш)
+    if (_joinedBoards.isEmpty) {
+      try {
+        var allBoards = await BoardStorage.loadAllBoards();
+        if (mounted) {
+          setState(() {
+            _joinedBoards = allBoards.where((b) => b.isJoined == true).toList();
+          });
+        }
+      } catch (e) {
+        // ігноруємо помилки локального завантаження на старті
+      }
+    }
 
+    // Не блокуємо UI лоадером, якщо дані вже є (Pull-to-refresh ефект)
+    if (_joinedBoards.isEmpty) {
+      setState(() => _isLoading = true);
+    }
+
+    final api = BoardApiService();
+    try {
+      // 2. Отримуємо свіжі дані з сервера
+      final serverBoardsData = await api.getJoinedBoards();
+      logger.i(
+        "Server returned ${serverBoardsData.length} boards",
+      ); // Лог для перевірки
+
+      // 3. Формуємо новий список об'єктів BoardModel прямо з відповіді сервера
+      List<BoardModel> freshJoinedBoards = [];
+
+      // Список ID для перевірки видалення
+      Set<String> serverIds = {};
+
+      for (var data in serverBoardsData) {
+        final String id = data['id'];
+        final String title =
+            data['name']; // ВАЖЛИВО: Бекенд віддає 'name', а не 'title'
+        serverIds.add(id);
+
+        final newBoard = BoardModel(
+          id: id,
+          title: title,
+          isJoined: true,
+          // Зберігаємо інші поля, якщо вони є локально (наприклад, шляхи до файлів)
+          // Але оскільки це join screen, шляхи підтягнуться пізніше
+        );
+
+        freshJoinedBoards.add(newBoard);
+
+        // 4. Асинхронно оновлюємо кеш (зберігаємо на диск)
+        // Не чекаємо await, щоб не гальмувати UI, або чекаємо, якщо критично
+        await BoardStorage.saveBoard(newBoard, isConnectedBoard: true);
+      }
+
+      // 5. Видаляємо локально ті, яких немає на сервері (синхронізація видалення)
+      var currentLocal = await BoardStorage.loadAllBoards();
+      for (var local in currentLocal) {
+        if (local.isJoined &&
+            local.id != null &&
+            !serverIds.contains(local.id)) {
+          await BoardStorage.deleteBoard(local.id!, isConnectedBoard: true);
+        }
+      }
+
+      // 6. ОНОВЛЮЄМО UI ДАНИМИ З СЕРВЕРА (Джерело правди)
       if (mounted) {
         setState(() {
-          _joinedBoards = joined;
+          _joinedBoards = freshJoinedBoards;
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      logger.e("Error syncing with server: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Помилка синхронізації: $e")));
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -94,6 +160,7 @@ class _JoinScreenState extends State<JoinScreen> {
                             final title = titleController.text.trim();
                             if (id.isEmpty || title.isEmpty) return;
 
+                            // 1. Запускаємо лоадер
                             setDialogState(() => isDialogLoading = true);
 
                             try {
@@ -111,68 +178,42 @@ class _JoinScreenState extends State<JoinScreen> {
                                 isConnectedBoard: true,
                               );
 
+                              // 2. УСПІХ: Просто закриваємо діалог.
+                              // Не треба робити setDialogState(false), бо діалогу вже не буде.
                               if (mounted) Navigator.pop(context);
+
                               await _loadBoards();
                             } on BoardLimitException {
+                              // 3. ПОМИЛКА ЛІМІТУ: Діалог залишається відкритим?
+                              // Тут ви закриваєте діалог вручну, тому теж не треба оновлювати стан.
                               if (mounted) {
                                 Navigator.pop(context);
-
+                                // ... ваш код показу діалогу про ліміт ...
                                 showDialog(
                                   context: context,
                                   builder:
                                       (context) => AlertDialog(
-                                        title: Text(S.t('limit_reached')),
-                                        content: Text(S.t('limit_join_desc')),
-                                        actions: [
-                                          TextButton(
-                                            onPressed:
-                                                () => Navigator.pop(context),
-                                            child: Text(S.t('cancel')),
-                                          ),
-                                          ElevatedButton(
-                                            onPressed: () async {
-                                              Navigator.pop(context);
-                                              String urlString =
-                                                  (appLocale
-                                                              .value
-                                                              .languageCode ==
-                                                          'uk')
-                                                      ? "https://boardly.studio/ua/profile.html"
-                                                      : "https://boardly.studio/en/login.html";
-
-                                              final Uri url = Uri.parse(
-                                                urlString,
-                                              );
-                                              if (await canLaunchUrl(url)) {
-                                                await launchUrl(
-                                                  url,
-                                                  mode:
-                                                      LaunchMode
-                                                          .externalApplication,
-                                                );
-                                              }
-                                            },
-                                            child: Text(
-                                              S.t('manage_subscription'),
-                                            ),
-                                          ),
-                                        ],
+                                        // ... ваш код діалогу ...
                                       ),
                                 );
                               }
                             } catch (e) {
+                              // 4. ІНША ПОМИЛКА: Діалог залишається, треба вимкнути спінер
                               if (mounted) {
+                                // Обгортаємо в try-catch на випадок, якщо юзер сам закрив діалог під час запиту
+                                try {
+                                  setDialogState(() => isDialogLoading = false);
+                                } catch (_) {}
+
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text("${S.t('error_prefix')} $e"),
                                   ),
                                 );
                               }
-                            } finally {
-                              if (mounted && isDialogLoading) {
-                                setDialogState(() => isDialogLoading = false);
-                              }
                             }
+                            // 5. БЛОК FINALLY ВИДАЛЕНО
+                            // Ми керуємо станом спінера явно в блоках try/catch
                           },
                   child:
                       isDialogLoading

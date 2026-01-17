@@ -14,7 +14,7 @@ import 'package:boardly/models/board_items.dart';
 class WebRTCManager {
   final String signalingServerUrl;
   final String boardId;
-  final int maxPeers; 
+  final int maxPeers;
 
   WebSocketChannel? _channel;
   String? _myPeerId;
@@ -808,6 +808,28 @@ class WebRTCManager {
       'fileId': fileId,
       'index': index,
       'data': base64Data,
+    });
+  }
+
+  void broadcastFileRename(String fileId, String oldName, String newName) {
+    _broadcastMessage({
+      'type': 'file-rename',
+      'fileId': fileId,
+      'oldName': oldName,
+      'newName': newName,
+    });
+  }
+
+  void broadcastFolderRename(
+    String connectionId,
+    String oldName,
+    String newName,
+  ) {
+    _broadcastMessage({
+      'type': 'folder-rename',
+      'connectionId': connectionId,
+      'oldName': oldName,
+      'newName': newName,
     });
   }
 

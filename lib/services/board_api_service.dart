@@ -77,18 +77,43 @@ class BoardApiService {
     }
   }
 
-  Future<void> leaveBoard(String boardId) async {
+  Future<List<Map<String, dynamic>>> getJoinedBoards() async {
+    final client = AuthHttpClient();
     try {
       final response = await client.request(
-        Uri.parse('$baseUrl/boards/leave/$boardId'),
+        Uri.parse('$baseUrl/boards/joined'),
+        method: 'GET',
+      );
+
+      if (response.statusCode == 200) {
+        logger.i("API Raw Response: ${response.body}");
+
+        final List<dynamic> data = jsonDecode(response.body);
+        return data.cast<Map<String, dynamic>>();
+      } else {
+        throw Exception(
+          'Failed to load joined boards: ${response.statusCode} ${response.body}',
+        );
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<void> leaveBoard(String boardId) async {
+    final client = AuthHttpClient();
+    try {
+      final response = await client.request(
+        Uri.parse('https://boardly.studio/api/boards/leave/$boardId'),
         method: 'DELETE',
       );
 
       if (response.statusCode != 200) {
-        throw Exception("Failed to leave board on server: ${response.body}");
+        throw Exception('Failed to leave board: ${response.body}');
       }
     } catch (e) {
       logger.e("API Leave Error: $e");
+      rethrow;
     } finally {
       client.close();
     }

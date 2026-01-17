@@ -325,7 +325,7 @@ class CanvasBoardState extends State<CanvasBoard> {
       logger.i("✏️ Folder Renamed: $oldName -> $newName");
       _safeSetState(() {
         conn.name = newName;
-
+        // ... (код оновлення шляхів айтемів залишається без змін) ...
         for (var itemId in conn.itemIds) {
           final itemIndex = items.indexWhere((i) => i.id == itemId);
           if (itemIndex != -1) {
@@ -349,6 +349,7 @@ class CanvasBoardState extends State<CanvasBoard> {
         widget.webRTCManager!.broadcastConnectionUpdate(
           widget.board!.connections!,
         );
+        widget.webRTCManager!.broadcastFolderRename(conn.id, oldName, newName);
       }
     }
   }
@@ -557,8 +558,8 @@ class CanvasBoardState extends State<CanvasBoard> {
 
       _searchController.dispose();
 
-      super.dispose();
     }
+    super.dispose();
   }
 
   void _registerRtcListeners() {
@@ -834,6 +835,109 @@ class CanvasBoardState extends State<CanvasBoard> {
     }
   }
 
+  Future<void> _handleRemoteFileRename(Map<String, dynamic> data) async {
+    final String fileId = data['fileId'];
+    final String oldName = data['oldName'];
+    final String newName = data['newName'];
+
+    final itemIndex = items.indexWhere((i) => i.id == fileId);
+    if (itemIndex == -1) return;
+
+    final item = items[itemIndex];
+
+    // Формуємо нові шляхи
+    final String oldPath = item.originalPath;
+    final String dir = p.dirname(oldPath);
+    final String newPath = p.join(dir, newName);
+    final newExt = p.extension(newPath).replaceFirst('.', '').toLowerCase();
+
+    // 1. Оновлюємо UI та модель
+    _safeSetState(() {
+      items[itemIndex] = item.copyWith(
+        fileName: newName,
+        path: newPath,
+        originalPath: newPath,
+        shortcutPath: newPath,
+        type: newExt.isNotEmpty ? newExt : item.type,
+      );
+    });
+
+    // 2. Фізичне перейменування на диску
+    final File oldFile = File(oldPath);
+    if (await oldFile.exists()) {
+      // Ігноруємо наступну зміну для цього файлу, щоб не створити нескінченний цикл
+      _fileMonitorService?.ignoreNextChange(newName);
+      try {
+        await oldFile.rename(newPath);
+        logger.i("Remote rename applied: $oldName -> $newName");
+      } catch (e) {
+        logger.e("Failed to apply remote rename: $e");
+        // Якщо rename не вдався (наприклад, файл зайнятий), можна спробувати копіювати+видалити
+      }
+    } else {
+      logger.w("Remote rename requested, but local file not found: $oldPath");
+    }
+
+    _saveBoard();
+  }
+
+  Future<void> _handleRemoteFolderRename(Map<String, dynamic> data) async {
+    final String connectionId = data['connectionId'];
+    final String oldName = data['oldName'];
+    final String newName = data['newName'];
+
+    final conn = widget.board?.connections?.firstWhereOrNull(
+      (c) => c.id == connectionId,
+    );
+    if (conn == null) return;
+
+    _safeSetState(() {
+      conn.name = newName;
+    });
+
+    // Шукаємо папку
+    final currentFilesDir = await _getCurrentFilesDir();
+    final oldDirPath = p.join(currentFilesDir, oldName);
+    final newDirPath = p.join(currentFilesDir, newName);
+
+    final dir = Directory(oldDirPath);
+    if (await dir.exists()) {
+      _fileMonitorService?.ignoreNextChange(newName);
+      try {
+        await dir.rename(newDirPath);
+        logger.i("Remote folder rename applied: $oldName -> $newName");
+
+        // Оновлюємо шляхи для всіх файлів, що були в цій папці
+        _safeSetState(() {
+          for (final itemId in conn.itemIds) {
+            final index = items.indexWhere((i) => i.id == itemId);
+            if (index != -1) {
+              final item = items[index];
+              // Перевіряємо, чи файл дійсно був в цій папці
+              if (p.isWithin(oldDirPath, item.originalPath)) {
+                final relative = p.relative(
+                  item.originalPath,
+                  from: oldDirPath,
+                );
+                final newItemPath = p.join(newDirPath, relative);
+
+                items[index] = item.copyWith(
+                  path: newItemPath,
+                  originalPath: newItemPath,
+                  shortcutPath: newItemPath,
+                );
+              }
+            }
+          }
+        });
+      } catch (e) {
+        logger.e("Failed to apply remote folder rename: $e");
+      }
+    }
+
+    _saveBoard();
+  }
+
   void _setupWebRTCListener() {
     if (widget.webRTCManager == null) return;
 
@@ -908,6 +1012,14 @@ class CanvasBoardState extends State<CanvasBoard> {
 
           case 'file-transfer-start':
             _handleFileTransferStart(data);
+            break;
+
+          case 'file-rename':
+            _handleRemoteFileRename(data);
+            break;
+
+          case 'folder-rename':
+            _handleRemoteFolderRename(data);
             break;
 
           case 'file-chunk':
@@ -1392,7 +1504,16 @@ class CanvasBoardState extends State<CanvasBoard> {
       });
 
       _saveBoard();
-      widget.webRTCManager?.broadcastItemUpdate(updatedItem);
+
+      // ОНОВЛЕНО: Надсилаємо специфічну команду перейменування
+      widget.webRTCManager?.broadcastItemUpdate(
+        updatedItem,
+      ); // Для оновлення позиції/тегів
+      widget.webRTCManager?.broadcastFileRename(
+        updatedItem.id,
+        oldItem.fileName,
+        newName,
+      ); // Для фізичного перейменування у пірів
     } else {
       _handleExternalFileAdded(newPath);
     }
