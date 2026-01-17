@@ -23,6 +23,28 @@ class Connection {
     this.links,
   });
 
+  Connection copyWith({
+    String? id,
+    String? name,
+    List<String>? itemIds,
+    String? boardId,
+    bool? isCollapsed,
+    Offset? collapsedPosition,
+    int? colorValue,
+    List<BoardLink>? links,
+  }) {
+    return Connection(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      itemIds: itemIds ?? List.from(this.itemIds),
+      boardId: boardId ?? this.boardId,
+      isCollapsed: isCollapsed ?? this.isCollapsed,
+      collapsedPosition: collapsedPosition ?? this.collapsedPosition,
+      colorValue: colorValue ?? this.colorValue,
+      links: links ?? (this.links != null ? List.from(this.links!) : null),
+    );
+  }
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
@@ -43,7 +65,7 @@ class Connection {
       name: json['name'] as String,
       itemIds:
           (json['itemIds'] as List<dynamic>).map((e) => e.toString()).toList(),
-      boardId: json['boardId'] as String,
+      boardId: json['boardId'] as String?,
       isCollapsed: json['isCollapsed'] as bool? ?? false,
       collapsedPosition:
           json['collapsedPosition'] != null
@@ -53,7 +75,6 @@ class Connection {
               )
               : null,
       colorValue: json['colorValue'] ?? 0xFF2196F3,
-
       links:
           (json['links'] as List?)?.map((e) => BoardLink.fromJson(e)).toList(),
     );

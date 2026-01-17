@@ -28,6 +28,8 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
   late int _currentTabIndex;
   FileMonitorService? _fileMonitorService;
 
+  final Map<String, int> _nestingLevels = {};
+
   final GlobalKey<CanvasBoardState> _canvasKey = GlobalKey<CanvasBoardState>();
 
   bool _isConnected = false;
@@ -38,6 +40,10 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
     super.initState();
     _boards = [widget.initialBoard];
     _currentTabIndex = 0;
+
+    if (widget.initialBoard.id != null) {
+      _nestingLevels[widget.initialBoard.id!] = 0;
+    }
 
     if (widget.webRTCManager != null) {
       _isConnected = widget.webRTCManager!.isConnected;
@@ -75,43 +81,64 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
   }
 
   void _addConnectionBoard(Connection connection) {
-    final existingTabIndex = _boards.indexWhere(
-      (b) => b.isConnectionBoard && b.connectionId == connection.id,
-    );
+    // 1. Розрахунок рівня
+    final currentBoard = _boards[_currentTabIndex];
+    final currentLevel =
+        (currentBoard.id != null) ? (_nestingLevels[currentBoard.id] ?? 0) : 0;
+    final newLevel = currentLevel + 1;
+    _nestingLevels[connection.id] = newLevel;
 
     final mainBoard = _boards[0];
 
+    // 2. Файли (без змін)
     final updatedItems =
         mainBoard.items
             .where((item) => connection.itemIds.contains(item.id))
-            .map((item) {
-              return item.copyWith();
+            .map((item) => item.copyWith())
+            .toList();
+
+    // 🔥 3. ВИПРАВЛЕНО: Фільтрація вкладених папок
+    // Беремо тільки ті папки, які є "дітьми" (повністю знаходяться всередині поточної)
+    final childConnections =
+        mainBoard.connections
+            ?.where((conn) {
+              // Не показуємо саму себе
+              if (conn.id == connection.id) return false;
+
+              // Перевірка на підмножину (Subset):
+              // Папка 'conn' є вкладеною в 'connection', тільки якщо ВСІ її файли
+              // знаходяться всередині 'connection'.
+              if (conn.itemIds.isEmpty)
+                return false; // Порожні папки ігноруємо або обробляємо окремо
+
+              final isSubset = conn.itemIds.every(
+                (id) => connection.itemIds.contains(id),
+              );
+              return isSubset;
             })
+            .map((c) => c.copyWith())
             .toList();
 
     setState(() {
+      final existingTabIndex = _boards.indexWhere(
+        (b) => b.isConnectionBoard && b.connectionId == connection.id,
+      );
+
+      final newBoardModel = BoardModel(
+        id: connection.id,
+        title: connection.name,
+        items: updatedItems,
+        connections: childConnections, // Передаємо "чистий" список дітей
+        isConnectionBoard: true,
+        connectionId: connection.id,
+        links: connection.links ?? [],
+      );
+
       if (existingTabIndex != -1) {
-        final existingBoard = _boards[existingTabIndex];
-        _boards[existingTabIndex] = BoardModel(
-          id: connection.id,
-          title: connection.name,
-          items: updatedItems,
-          isConnectionBoard: true,
-          connectionId: connection.id,
-          links: connection.links ?? [],
-        );
+        _boards[existingTabIndex] = newBoardModel;
         _currentTabIndex = existingTabIndex;
       } else {
-        _boards.add(
-          BoardModel(
-            id: connection.id,
-            title: connection.name,
-            items: updatedItems,
-            isConnectionBoard: true,
-            connectionId: connection.id,
-            links: connection.links ?? [],
-          ),
-        );
+        _boards.add(newBoardModel);
         _currentTabIndex = _boards.length - 1;
       }
     });
@@ -125,18 +152,16 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
       }
     });
 
-    if (updatedBoard.isConnectionBoard && updatedBoard.connectionId != null) {
-      final mainBoard = _boards[0];
+    final mainBoard = _boards[0];
 
+    if (updatedBoard.isConnectionBoard && updatedBoard.connectionId != null) {
       final connIndex = mainBoard.connections?.indexWhere(
         (c) => c.id == updatedBoard.connectionId,
       );
 
       if (connIndex != null && connIndex != -1) {
         final connection = mainBoard.connections![connIndex];
-
         connection.links = updatedBoard.links ?? [];
-
         connection.itemIds = updatedBoard.items.map((e) => e.id).toList();
 
         for (final updatedItem in updatedBoard.items) {
@@ -145,27 +170,32 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
           );
 
           if (mainItemIndex != -1) {
-            mainBoard.items[mainItemIndex] = mainBoard.items[mainItemIndex]
-                .copyWith(
-                  position: updatedItem.position,
-                  originalPath: updatedItem.originalPath,
-                  path: updatedItem.path,
-                  connectionId: updatedBoard.connectionId,
-                  tags: updatedItem.tags,
-                  notes: updatedItem.notes,
-                );
+            mainBoard.items[mainItemIndex] = updatedItem;
           } else {
-            final newItem = updatedItem.copyWith(
-              connectionId: updatedBoard.connectionId,
-            );
-            mainBoard.items.add(newItem);
+            mainBoard.items.add(updatedItem);
           }
         }
-
-        _saveBoard(mainBoard);
       }
     } else {
       _saveBoard(updatedBoard);
+    }
+
+    if (updatedBoard.connections != null) {
+      mainBoard.connections ??= [];
+      for (final childConn in updatedBoard.connections!) {
+        final mainConnIndex = mainBoard.connections!.indexWhere(
+          (c) => c.id == childConn.id,
+        );
+        if (mainConnIndex != -1) {
+          mainBoard.connections![mainConnIndex] = childConn;
+        } else {
+          mainBoard.connections!.add(childConn);
+        }
+      }
+    }
+
+    if (updatedBoard.isConnectionBoard) {
+      _saveBoard(mainBoard);
     }
   }
 
@@ -279,6 +309,9 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
   Widget build(BuildContext context) {
     final currentBoard = _boards[_currentTabIndex];
 
+    final int level =
+        (currentBoard.id != null) ? (_nestingLevels[currentBoard.id] ?? 0) : 0;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -378,6 +411,7 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         onOpenConnectionBoard: _addConnectionBoard,
         onBoardUpdated: _onTabBoardUpdated,
         webRTCManager: widget.webRTCManager,
+        nestingLevel: level,
       ),
     );
   }

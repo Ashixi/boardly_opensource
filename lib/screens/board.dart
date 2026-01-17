@@ -35,6 +35,7 @@ class CanvasBoard extends StatefulWidget {
   final Function(Connection)? onOpenConnectionBoard;
   final Function(BoardModel)? onBoardUpdated;
   final WebRTCManager? webRTCManager;
+  final int nestingLevel;
 
   const CanvasBoard({
     super.key,
@@ -42,6 +43,7 @@ class CanvasBoard extends StatefulWidget {
     this.onOpenConnectionBoard,
     this.onBoardUpdated,
     this.webRTCManager,
+    this.nestingLevel = 0,
   });
 
   @override
@@ -1235,6 +1237,28 @@ class CanvasBoardState extends State<CanvasBoard> {
     }
   }
 
+  List<BoardItem> _getVisibleItems() {
+    if (widget.board?.isConnectionBoard == true) {
+      return items;
+    }
+
+    final visibleConnections = _getVisibleConnections() ?? [];
+
+    final visibleConnMap = {for (var c in visibleConnections) c.id: c};
+
+    return items.where((item) {
+      if (item.connectionId == null) return true;
+
+      final parentConn = visibleConnMap[item.connectionId];
+
+      if (parentConn == null) return false;
+
+      if (parentConn.isCollapsed) return false;
+
+      return true;
+    }).toList();
+  }
+
   void _handleFullBoardReceived(BoardModel receivedBoard, String from) async {
     if (!mounted) return;
     if (items.isNotEmpty && _isHost) return;
@@ -1515,10 +1539,8 @@ class CanvasBoardState extends State<CanvasBoard> {
   }
 
   Future<void> _createFolderFromSelection() async {
-    if (widget.board?.isConnectionBoard == true) {
-      _showErrorSnackbar(
-        "Вкладені папки всередині вкладених папок наразі обмежені!",
-      );
+    if (widget.nestingLevel >= 10) {
+      _showErrorSnackbar("Досягнуто максимального рівня вкладеності (10)!");
       _safeSetState(() => _folderSelection.clear());
       return;
     }
@@ -1526,7 +1548,7 @@ class CanvasBoardState extends State<CanvasBoard> {
     Color pickedColor = Colors.blue;
     String folderName = S.t('new_folder');
 
-    // Діалог вибору назви та кольору
+    // Діалог вибору назви та кольору (без змін)
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) {
@@ -1594,15 +1616,14 @@ class CanvasBoardState extends State<CanvasBoard> {
     }
 
     try {
-      final dirName = widget.board!.id!;
-      final boardFilesDir = await BoardStorage.getBoardFilesDirAuto(dirName);
-      final newFolderPath = p.join(boardFilesDir, folderName);
+      final currentFilesDir = await _getCurrentFilesDir();
+      final newFolderPath = p.join(currentFilesDir, folderName);
 
       final directory = Directory(newFolderPath);
 
       if (!await directory.exists()) {
         _fileMonitorService?.ignoreNextChange(folderName);
-        await directory.create();
+        await directory.create(recursive: true);
       }
 
       final firstItem = _folderSelection.first;
@@ -1669,6 +1690,31 @@ class CanvasBoardState extends State<CanvasBoard> {
       logger.e("Помилка створення папки: $e");
       _showErrorSnackbar("Не вдалося створити папку: $e");
     }
+  }
+
+  List<Connection>? _getVisibleConnections() {
+    final allConnections = widget.board?.connections;
+    if (allConnections == null) return null;
+
+    if (widget.board?.isConnectionBoard == true) {
+      return allConnections;
+    }
+
+    return allConnections.where((child) {
+      final isHiddenByAnyParent = allConnections.any((possibleParent) {
+        if (possibleParent.id == child.id) return false;
+
+        final isAncestor =
+            child.itemIds.isNotEmpty &&
+            child.itemIds.every((id) => possibleParent.itemIds.contains(id));
+
+        if (!isAncestor) return false;
+
+        return possibleParent.isCollapsed;
+      });
+
+      return !isHiddenByAnyParent;
+    }).toList();
   }
 
   Future<String> _getCurrentFilesDir() async {
@@ -1819,7 +1865,6 @@ class CanvasBoardState extends State<CanvasBoard> {
       final currentDir = await _getCurrentFilesDir();
       String filePath = p.join(currentDir, fullFileName);
 
-      // Переконуємось, що папка існує
       final dir = io.Directory(currentDir);
       if (!await dir.exists()) {
         await dir.create(recursive: true);
@@ -3330,13 +3375,14 @@ class CanvasBoardState extends State<CanvasBoard> {
                               Positioned.fill(
                                 child: CustomPaint(
                                   painter: BoardPainter(
-                                    items: items,
+                                    items: _getVisibleItems(),
                                     offset: offset,
                                     scale: scale,
                                     selectedItem: selectedItem,
+                                    connections: _getVisibleConnections(),
                                     folderSelectionItems: _folderSelection,
                                     links: widget.board?.links,
-                                    connections: widget.board?.connections,
+                                    // connections: widget.board?.connections,
                                     highlightedConnections:
                                         _highlightedConnection != null
                                             ? {_highlightedConnection!}
