@@ -89,7 +89,6 @@ class BoardApiService {
       }
     } catch (e) {
       logger.e("API Leave Error: $e");
-      // Не кидаємо rethrow, щоб дозволити локальне видалення, якщо сервер недоступний
     } finally {
       client.close();
     }

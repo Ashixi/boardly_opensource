@@ -62,7 +62,6 @@ class BoardStorage {
     return dir.path;
   }
 
-  // --- ЛОГІКА ПОШУКУ (Оновлена) ---
   static Future<String?> _findExistingBoardPath(String boardId) async {
     final baseDir = await _getBoardsBaseDir();
     final dir = Directory(baseDir);
@@ -72,14 +71,9 @@ class BoardStorage {
         if (entity is Directory) {
           final folderName = path.basename(entity.path);
 
-          // 1. НАЙШВИДШИЙ СПОСІБ: Перевіряємо, чи папка закінчується на цей ID
-          // Це знайде і "Проект_340e...", і просто "340e..."
           if (folderName.endsWith(boardId)) {
             return entity.path;
           }
-
-          // 2. РЕЗЕРВНИЙ СПОСІБ: Якщо раптом назва зовсім інша, читаємо meta.json
-          // Це для сумісності зі старими папками, якщо вони залишаться
           final metaFile = File(path.join(entity.path, 'meta.json'));
           if (await metaFile.exists()) {
             try {
@@ -103,7 +97,6 @@ class BoardStorage {
     String? existingPath = await _findExistingBoardPath(boardId);
     if (existingPath != null) return existingPath;
 
-    // Якщо папки немає, повертаємо шлях за замовчуванням (щоб не крашилось)
     final baseDir = await _getBoardsBaseDir();
     return path.join(baseDir, boardId);
   }
@@ -122,7 +115,6 @@ class BoardStorage {
     return getBoardFilesDir(boardId);
   }
 
-  // --- ЗБЕРЕЖЕННЯ (Формат: Назва_ID) ---
   static Future<void> saveBoard(
     BoardModel board, {
     bool isConnectedBoard = false,
@@ -131,28 +123,23 @@ class BoardStorage {
 
     if (isConnectedBoard ||
         board.isConnectionBoard ||
-        board.id!.startsWith('[#')) {
+        board.id!.startsWith('[#') ||
+        (board.title == null && board.id!.startsWith('['))) {
       return;
     }
 
     try {
       final baseDir = await _getBoardsBaseDir();
 
-      // 1. Шукаємо папку
       String? currentPath = await _findExistingBoardPath(board.id!);
       String targetPath;
 
       if (currentPath != null) {
-        // Папка вже є -> використовуємо її (навіть якщо назва дошки змінилась)
         targetPath = currentPath;
       } else {
-        // Папки немає -> Створюємо нову з форматом "Назва_ID"
-
         String safeTitle = _sanitizeFolderName(board.title ?? "Board");
         if (safeTitle.isEmpty) safeTitle = "Board";
 
-        // 🔥 ФОРМУЛА: Назва + "_" + ID
-        // Це гарантує унікальність без дужок (1), (2)
         String folderName = "${safeTitle}_${board.id}";
 
         targetPath = path.join(baseDir, folderName);
@@ -161,7 +148,6 @@ class BoardStorage {
         logger.i("Створено нову папку: $targetPath");
       }
 
-      // 2. Запис meta.json (Стандартний безпечний метод)
       final metaFilePath = path.join(targetPath, 'meta.json');
       final tempFilePath = path.join(targetPath, 'meta.json.tmp');
       final tempFile = File(tempFilePath);
@@ -196,7 +182,6 @@ class BoardStorage {
   }
 
   static String _sanitizeFolderName(String name) {
-    // Залишаємо тільки букви, цифри та пробіли. Замінюємо все інше на підкреслення.
     return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '').trim();
   }
 
@@ -216,6 +201,12 @@ class BoardStorage {
     List<BoardModel> boards = [];
     await for (var entity in dir.list()) {
       if (entity is Directory) {
+        final folderName = path.basename(entity.path);
+
+        if (folderName.startsWith('[') && folderName.endsWith(']')) {
+          continue;
+        }
+
         final metaFile = File(path.join(entity.path, 'meta.json'));
         if (await metaFile.exists()) {
           try {

@@ -49,13 +49,10 @@ class _HostScreenState extends State<HostScreen> {
       for (var b in allBoards) {
         if (b.isJoined) continue;
 
-        // ВИПРАВЛЕННЯ: Спочатку виправляємо статус дошки, а потім фільтруємо
         if (b.isConnectionBoard) {
           logger.i("Fixing corrupted host board: ${b.title}");
           b.isConnectionBoard = false;
           await BoardStorage.saveBoard(b);
-          // Після цього, якщо у дошки немає ownerId, вона з'явиться в "Моїх дошках",
-          // і ви зможете її видалити там.
         }
 
         if (b.ownerId == null) continue;
@@ -122,7 +119,6 @@ class _HostScreenState extends State<HostScreen> {
     }
 
     if (!widget.isPro && hostingBoards.length >= 4) {
-      // Fix limit check logic just in case
       if (!mounted) return;
       showDialog(
         context: context,
@@ -194,7 +190,6 @@ class _HostScreenState extends State<HostScreen> {
       final newBoard = await widget.onAddNewAndHostBoard(customName.trim());
       if (!mounted) return;
 
-      // Важливо: спочатку оновлюємо список, щоб побачити нову дошку, потім відкриваємо
       await _loadBoards();
       await widget.onOpenAndHostBoard(newBoard);
     } catch (e) {

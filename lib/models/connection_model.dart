@@ -1,4 +1,3 @@
-// lib/models/connection_model.dart
 import 'dart:ui';
 
 class Connection {
@@ -20,8 +19,8 @@ class Connection {
     required this.boardId,
     this.isCollapsed = false,
     this.collapsedPosition,
-    this.colorValue = 0xFF2196F3,  
-    this.links, 
+    this.colorValue = 0xFF2196F3,
+    this.links,
   });
 
   Map<String, dynamic> toJson() => {
@@ -35,7 +34,7 @@ class Connection {
             ? {'dx': collapsedPosition!.dx, 'dy': collapsedPosition!.dy}
             : null,
     'colorValue': colorValue,
-    'links': links?.map((l) => l.toJson()).toList(), 
+    'links': links?.map((l) => l.toJson()).toList(),
   };
 
   factory Connection.fromJson(Map<String, dynamic> json) {
@@ -54,27 +53,26 @@ class Connection {
               )
               : null,
       colorValue: json['colorValue'] ?? 0xFF2196F3,
-      
+
       links:
           (json['links'] as List?)?.map((e) => BoardLink.fromJson(e)).toList(),
     );
   }
 }
 
-
 class BoardLink {
   final String id;
   final String fromItemId;
   final String toItemId;
   final int colorValue;
-  final double strokeWidth;   
+  final double strokeWidth;
 
   BoardLink({
     required this.id,
     required this.fromItemId,
     required this.toItemId,
-    this.colorValue = 0xFF000000, 
-    this.strokeWidth = 2.0, 
+    this.colorValue = 0xFF000000,
+    this.strokeWidth = 2.0,
   });
 
   Map<String, dynamic> toJson() => {

@@ -75,14 +75,12 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
   }
 
   void _addConnectionBoard(Connection connection) {
-    // Шукаємо, чи вже відкрита ця папка
     final existingTabIndex = _boards.indexWhere(
       (b) => b.isConnectionBoard && b.connectionId == connection.id,
     );
 
     final mainBoard = _boards[0];
 
-    // Відфільтровуємо елементи, які належать цій папці
     final updatedItems =
         mainBoard.items
             .where((item) => connection.itemIds.contains(item.id))
@@ -93,10 +91,9 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
 
     setState(() {
       if (existingTabIndex != -1) {
-        // Оновлюємо існуючу вкладку
         final existingBoard = _boards[existingTabIndex];
         _boards[existingTabIndex] = BoardModel(
-          id: connection.id, // ВАЖЛИВО: ID дошки = ID з'єднання
+          id: connection.id,
           title: connection.name,
           items: updatedItems,
           isConnectionBoard: true,
@@ -105,10 +102,9 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         );
         _currentTabIndex = existingTabIndex;
       } else {
-        // Створюємо нову вкладку
         _boards.add(
           BoardModel(
-            id: connection.id, // ВАЖЛИВО: ID дошки = ID з'єднання
+            id: connection.id,
             title: connection.name,
             items: updatedItems,
             isConnectionBoard: true,
@@ -129,11 +125,9 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
       }
     });
 
-    // Якщо це вкладена дошка
     if (updatedBoard.isConnectionBoard && updatedBoard.connectionId != null) {
       final mainBoard = _boards[0];
 
-      // Знаходимо саме з'єднання (папку) на головній дошці
       final connIndex = mainBoard.connections?.indexWhere(
         (c) => c.id == updatedBoard.connectionId,
       );
@@ -141,10 +135,8 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
       if (connIndex != null && connIndex != -1) {
         final connection = mainBoard.connections![connIndex];
 
-        // 1. Оновлюємо стрілки всередині папки
         connection.links = updatedBoard.links ?? [];
 
-        // 2. Оновлюємо список ID, які належать папці
         connection.itemIds = updatedBoard.items.map((e) => e.id).toList();
 
         for (final updatedItem in updatedBoard.items) {
@@ -153,24 +145,16 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
           );
 
           if (mainItemIndex != -1) {
-            // Оновлюємо існуючий елемент
-            mainBoard
-                .items[mainItemIndex] = mainBoard.items[mainItemIndex].copyWith(
-              position: updatedItem.position,
-              originalPath:
-                  updatedItem
-                      .originalPath, // Шлях не міняємо, якщо він вже був правильний
-              path: updatedItem.path,
-              connectionId: updatedBoard.connectionId,
-              tags: updatedItem.tags,
-              notes: updatedItem.notes,
-            );
+            mainBoard.items[mainItemIndex] = mainBoard.items[mainItemIndex]
+                .copyWith(
+                  position: updatedItem.position,
+                  originalPath: updatedItem.originalPath,
+                  path: updatedItem.path,
+                  connectionId: updatedBoard.connectionId,
+                  tags: updatedItem.tags,
+                  notes: updatedItem.notes,
+                );
           } else {
-            // --- FIX: Додавання нового файлу з вкладеної дошки ---
-            // Новий файл приходить з updatedItem.
-            // Оскільки ми заблокували збереження nested-дошок, файл фізично може ще не бути переміщений.
-            // Але головне тут - додати його в items головної дошки з правильним connectionId.
-
             final newItem = updatedItem.copyWith(
               connectionId: updatedBoard.connectionId,
             );
@@ -178,11 +162,9 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
           }
         }
 
-        // Зберігаємо ТІЛЬКИ головну дошку
         _saveBoard(mainBoard);
       }
     } else {
-      // Це головна дошка
       _saveBoard(updatedBoard);
     }
   }
@@ -307,13 +289,10 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
           onPressed: () {
-            // 1. Розриваємо з'єднання перед виходом
             if (widget.webRTCManager != null) {
               widget.webRTCManager!.disconnect();
             }
 
-            // 2. ПЕРЕХІД НА СТАРТОВИЙ ЕКРАН (Addboard)
-            // (route) => false означає "видалити всю історію переходів"
             Navigator.pushAndRemoveUntil(
               context,
               MaterialPageRoute(builder: (context) => const Addboard()),
@@ -369,7 +348,6 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
               onPressed: _showBoardIdDialog,
             ),
         ],
-        // ... (bottom секція з табами залишається без змін)
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(60),
           child: Container(

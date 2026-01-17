@@ -12,9 +12,14 @@ class FileMonitorService {
   final WebRTCManager? rtcManager;
   final String boardId;
   final String? Function(String filePath) getFileIdCallback;
+
   final Function(String path)? onFileAdded;
   final Function(String oldPath, String newPath)? onFileRenamed;
   final Function(String path)? onFileDeleted;
+
+  final Function(String path)? onFolderAdded;
+  final Function(String oldPath, String newPath)? onFolderRenamed;
+  final Function(String path)? onFolderDeleted;
 
   StreamSubscription<FileSystemEvent>? _watcherSubscription;
   final Set<String> _ignoredFiles = {};
@@ -27,6 +32,9 @@ class FileMonitorService {
     this.onFileAdded,
     this.onFileRenamed,
     this.onFileDeleted,
+    this.onFolderAdded,
+    this.onFolderRenamed,
+    this.onFolderDeleted,
   });
 
   Future<void> startMonitoring() async {
@@ -38,7 +46,7 @@ class FileMonitorService {
         await directory.create(recursive: true);
       }
 
-      logger.i('👀 Starting Full file monitor for: $filesDirPath');
+      logger.i('👀 Starting Full file/folder monitor for: $filesDirPath');
       await Future.delayed(const Duration(milliseconds: 1000));
 
       _watcherSubscription = directory
@@ -59,8 +67,6 @@ class FileMonitorService {
   }
 
   void _handleFileSystemEvent(FileSystemEvent event) {
-    if (event.isDirectory) return;
-
     String filePath = event.path;
     String? destinationPath;
 
@@ -74,11 +80,8 @@ class FileMonitorService {
 
     if (fileName == 'Thumbs.db' ||
         fileName == 'desktop.ini' ||
-        fileName == '.DS_Store') {
-      return;
-    }
-
-    if (fileName.startsWith('~\$') ||
+        fileName == '.DS_Store' ||
+        fileName.startsWith('~\$') ||
         fileName.endsWith('.tmp') ||
         fileName.endsWith('.part') ||
         fileName.startsWith('.')) {
@@ -88,6 +91,28 @@ class FileMonitorService {
     if (_ignoredFiles.contains(fileName.toLowerCase())) {
       return;
     }
+
+    if (event.isDirectory) {
+      if (event is FileSystemCreateEvent) {
+        if (_debounceTimers.containsKey(filePath)) {
+          _debounceTimers[filePath]?.cancel();
+        }
+        _debounceTimers[filePath] = Timer(
+          const Duration(milliseconds: 500),
+          () {
+            _debounceTimers.remove(filePath);
+            if (_ignoredFiles.contains(fileName.toLowerCase())) return;
+            onFolderAdded?.call(filePath);
+          },
+        );
+      } else if (event is FileSystemDeleteEvent) {
+        onFolderDeleted?.call(filePath);
+      } else if (event is FileSystemMoveEvent && destinationPath != null) {
+        onFolderRenamed?.call(filePath, destinationPath);
+      }
+      return;
+    }
+
     if (event is FileSystemDeleteEvent) {
       onFileDeleted?.call(filePath);
       return;
@@ -103,10 +128,8 @@ class FileMonitorService {
           return;
         }
         if (_ignoredFiles.contains(fileName.toLowerCase())) {
-          logger.i('🛑 File creation ignored (late check): $fileName');
           return;
         }
-
         onFileAdded?.call(filePath);
       });
     }
@@ -133,7 +156,7 @@ class FileMonitorService {
     final String? itemId = getFileIdCallback(filePath);
     if (itemId == null) return;
 
-    if (_ignoredFiles.contains(fileName)) return;
+    if (_ignoredFiles.contains(fileName.toLowerCase())) return;
 
     try {
       if (!await file.exists()) return;
@@ -184,10 +207,6 @@ class FileMonitorService {
         }
       }
 
-      logger.i(
-        '📂 Streaming updated file: $fileName (Size: $lastLength bytes)',
-      );
-
       if (rtcManager != null) {
         logger.i('📂 Streaming updated file: $fileName');
 
@@ -228,11 +247,14 @@ class FileMonitorService {
     }
   }
 
-  void ignoreNextChange(String fileName) {
-    final lowerName = fileName.toLowerCase();
+  /// Use this to ignore a file OR folder name from the next event.
+  /// Useful when creating folders via UI ('F' key) to avoid feedback loops.
+  void ignoreNextChange(String name) {
+    final lowerName = name.toLowerCase();
     _ignoredFiles.add(lowerName);
 
-    Timer(const Duration(seconds: 10), () {
+    // Keep it ignored for a bit longer to be safe (OS events can be delayed)
+    Timer(const Duration(seconds: 5), () {
       _ignoredFiles.remove(lowerName);
     });
   }

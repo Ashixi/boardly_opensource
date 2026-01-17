@@ -51,16 +51,13 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _showJoinNewBoardDialog(BuildContext context) async {
-    // Видаляємо локальну перевірку лімітів на початку.
-    // Тепер перевірка відбувається на сервері при спробі приєднання.
-
     final idController = TextEditingController();
     final titleController = TextEditingController();
 
     await showDialog(
       context: context,
       builder: (ctx) {
-        bool isDialogLoading = false; // Локальний стан завантаження для діалогу
+        bool isDialogLoading = false;
 
         return StatefulBuilder(
           builder: (context, setDialogState) {
@@ -100,11 +97,9 @@ class _JoinScreenState extends State<JoinScreen> {
                             setDialogState(() => isDialogLoading = true);
 
                             try {
-                              // 1. Спроба приєднатися на сервері (Тут перевіряються ліміти)
                               final api = BoardApiService();
                               await api.joinBoard(id);
 
-                              // 2. Якщо успішно — зберігаємо локально
                               final newBoard = BoardModel(
                                 id: id,
                                 title: title,
@@ -116,19 +111,12 @@ class _JoinScreenState extends State<JoinScreen> {
                                 isConnectedBoard: true,
                               );
 
-                              if (mounted)
-                                Navigator.pop(
-                                  context,
-                                ); // Закриваємо діалог вводу
-                              await _loadBoards(); // Оновлюємо список
+                              if (mounted) Navigator.pop(context);
+                              await _loadBoards();
                             } on BoardLimitException {
-                              // ЛІМІТ ВИЧЕРПАНО (403 від сервера)
                               if (mounted) {
-                                Navigator.pop(
-                                  context,
-                                ); // Закриваємо діалог вводу
+                                Navigator.pop(context);
 
-                                // Відкриваємо діалог про Pro версію
                                 showDialog(
                                   context: context,
                                   builder:

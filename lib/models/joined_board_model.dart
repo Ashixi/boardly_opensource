@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 class JoinedBoardInfo {
-  final String id; 
-  final String title; 
+  final String id;
+  final String title;
   final String directory;
 
   JoinedBoardInfo({

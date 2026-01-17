@@ -1,4 +1,3 @@
-// lib/models/board_model.dart
 import 'board_items.dart';
 import 'connection_model.dart';
 

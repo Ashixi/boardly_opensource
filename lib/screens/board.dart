@@ -157,10 +157,18 @@ class CanvasBoardState extends State<CanvasBoard> {
           return item?.id;
         },
 
+        // FILE callbacks
         onFileAdded: (String path) => _handleExternalFileAdded(path),
         onFileRenamed:
             (String old, String newP) => _handleExternalFileRenamed(old, newP),
         onFileDeleted: (String path) => _handleExternalFileDeleted(path),
+
+        // FOLDER callbacks
+        onFolderAdded: (String path) => _handleExternalFolderAdded(path),
+        onFolderRenamed:
+            (String old, String newP) =>
+                _handleExternalFolderRenamed(old, newP),
+        onFolderDeleted: (String path) => _handleExternalFolderDeleted(path),
       );
 
       _fileMonitorService!.startMonitoring();
@@ -261,6 +269,107 @@ class CanvasBoardState extends State<CanvasBoard> {
       logger.w("Error searching for local file: $e");
     }
     return null;
+  }
+
+  void _handleExternalFolderAdded(String path) {
+    if (!mounted) return;
+    final folderName = p.basename(path);
+
+    final exists =
+        widget.board?.connections?.any((c) => c.name == folderName) ?? false;
+    if (exists) return;
+
+    logger.i("📂 External Folder Detected: $folderName");
+
+    Offset position = const Offset(200, 200);
+    if ((widget.board?.connections?.isNotEmpty ?? false)) {
+      final lastPos = widget.board!.connections!.last.collapsedPosition;
+      if (lastPos != null) position = lastPos + const Offset(20, 20);
+    }
+
+    final newFolder = Connection(
+      id: UniqueKey().toString(),
+      name: folderName,
+      itemIds: [],
+      boardId: widget.board!.id,
+      isCollapsed: true,
+      collapsedPosition: position,
+      colorValue: Colors.blue.value,
+    );
+
+    _safeSetState(() {
+      widget.board?.connections ??= [];
+      widget.board!.connections!.add(newFolder);
+    });
+    _saveBoard();
+
+    if (widget.webRTCManager != null) {
+      widget.webRTCManager!.broadcastConnectionUpdate(
+        widget.board!.connections!,
+      );
+    }
+  }
+
+  void _handleExternalFolderRenamed(String oldPath, String newPath) {
+    if (!mounted) return;
+    final oldName = p.basename(oldPath);
+    final newName = p.basename(newPath);
+
+    final conn = widget.board?.connections?.firstWhereOrNull(
+      (c) => c.name == oldName,
+    );
+
+    if (conn != null) {
+      logger.i("✏️ Folder Renamed: $oldName -> $newName");
+      _safeSetState(() {
+        conn.name = newName;
+
+        for (var itemId in conn.itemIds) {
+          final itemIndex = items.indexWhere((i) => i.id == itemId);
+          if (itemIndex != -1) {
+            final item = items[itemIndex];
+            if (item.originalPath.contains(oldName)) {
+              final newItemPath = item.originalPath.replaceFirst(
+                oldName,
+                newName,
+              );
+              items[itemIndex] = item.copyWith(
+                path: newItemPath,
+                originalPath: newItemPath,
+                shortcutPath: newItemPath,
+              );
+            }
+          }
+        }
+      });
+      _saveBoard();
+      if (widget.webRTCManager != null) {
+        widget.webRTCManager!.broadcastConnectionUpdate(
+          widget.board!.connections!,
+        );
+      }
+    }
+  }
+
+  void _handleExternalFolderDeleted(String path) {
+    if (!mounted) return;
+    final folderName = p.basename(path);
+
+    final conn = widget.board?.connections?.firstWhereOrNull(
+      (c) => c.name == folderName,
+    );
+    if (conn != null) {
+      logger.i("🗑️ Folder Deleted: $folderName");
+      _safeSetState(() {
+        widget.board!.connections!.remove(conn);
+      });
+      _saveBoard();
+      if (widget.webRTCManager != null) {
+        widget.webRTCManager!.broadcastConnectionUpdate(
+          widget.board!.connections!,
+        );
+      }
+    }
   }
 
   Future<void> _safeWriteBytes(File file, List<int> bytes) async {
@@ -1171,7 +1280,6 @@ class CanvasBoardState extends State<CanvasBoard> {
     final fileName = p.basename(path);
 
     if (_locallyProcessingFiles.contains(fileName.toLowerCase())) {
-      logger.i("🛡️ Blocked duplicate from monitor: $fileName");
       return;
     }
 
@@ -1181,6 +1289,22 @@ class CanvasBoardState extends State<CanvasBoard> {
     if (existing != null) return;
 
     logger.i("📂 External file detected: $path");
+
+    final parentDirName = p.basename(p.dirname(path));
+    String? assignedConnectionId;
+
+    if (widget.board?.id != null &&
+        parentDirName != widget.board!.id &&
+        parentDirName != 'files') {
+      final conn = widget.board?.connections?.firstWhereOrNull(
+        (c) => c.name == parentDirName,
+      );
+
+      if (conn != null) {
+        assignedConnectionId = conn.id;
+        logger.i("🔗 Auto-assigning file to folder: ${conn.name}");
+      }
+    }
 
     final ext = p.extension(path).replaceFirst('.', '').toLowerCase();
 
@@ -1198,15 +1322,22 @@ class CanvasBoardState extends State<CanvasBoard> {
       position: position,
       type: ext.isEmpty ? 'file' : ext,
       fileName: fileName,
+      connectionId: assignedConnectionId,
     );
 
     _safeSetState(() {
       items.add(newItem);
+
+      if (assignedConnectionId != null) {
+        final conn = widget.board?.connections?.firstWhereOrNull(
+          (c) => c.id == assignedConnectionId,
+        );
+        conn?.itemIds.add(newItem.id);
+      }
     });
 
-    _saveBoard();
+    await _saveBoard();
     _broadcastItemAdd(item: newItem);
-
     _streamFileToPeers(newItem, path);
   }
 
@@ -1395,6 +1526,7 @@ class CanvasBoardState extends State<CanvasBoard> {
     Color pickedColor = Colors.blue;
     String folderName = S.t('new_folder');
 
+    // Діалог вибору назви та кольору
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) {
@@ -1443,7 +1575,8 @@ class CanvasBoardState extends State<CanvasBoard> {
                 ),
                 TextButton(
                   onPressed: () {
-                    folderName = tempName;
+                    folderName = tempName.trim();
+                    if (folderName.isEmpty) folderName = S.t('new_folder');
                     Navigator.pop(ctx, true);
                   },
                   child: Text(S.t('create')),
@@ -1466,7 +1599,9 @@ class CanvasBoardState extends State<CanvasBoard> {
       final newFolderPath = p.join(boardFilesDir, folderName);
 
       final directory = Directory(newFolderPath);
+
       if (!await directory.exists()) {
+        _fileMonitorService?.ignoreNextChange(folderName);
         await directory.create();
       }
 
@@ -1485,12 +1620,18 @@ class CanvasBoardState extends State<CanvasBoard> {
 
       for (final item in _folderSelection) {
         final oldFile = File(item.originalPath);
+
         if (await oldFile.exists()) {
           final newPath = p.join(newFolderPath, item.fileName);
 
           _fileMonitorService?.ignoreNextChange(item.fileName);
 
-          await oldFile.rename(newPath);
+          try {
+            await oldFile.rename(newPath);
+          } catch (e) {
+            await oldFile.copy(newPath);
+            await oldFile.delete();
+          }
 
           item.originalPath = newPath;
           item.path = newPath;
@@ -1503,6 +1644,7 @@ class CanvasBoardState extends State<CanvasBoard> {
           );
           old?.itemIds.remove(item.id);
         }
+
         item.connectionId = newFolder.id;
       }
 
@@ -1513,9 +1655,19 @@ class CanvasBoardState extends State<CanvasBoard> {
       });
 
       await _saveBoard();
+
+      if (widget.webRTCManager != null) {
+        widget.webRTCManager!.broadcastConnectionUpdate(
+          widget.board!.connections!,
+        );
+        for (var item in newFolder.itemIds) {
+          final i = items.firstWhereOrNull((it) => it.id == item);
+          if (i != null) widget.webRTCManager!.broadcastItemUpdate(i);
+        }
+      }
     } catch (e) {
-      logger.e("Помилка створення реальної папки: $e");
-      _showErrorSnackbar("Не вдалося створити папку на диску: $e");
+      logger.e("Помилка створення папки: $e");
+      _showErrorSnackbar("Не вдалося створити папку: $e");
     }
   }
 
@@ -1541,14 +1693,13 @@ class CanvasBoardState extends State<CanvasBoard> {
   //         (l) => l.fromItemId == from.id && l.toItemId == to.id,
   //       );
   //       if (!exists) {
-  //         // 🔥 FIX: Створюємо повноцінну стрілку з поточними налаштуваннями
   //         final link = BoardLink(
   //           id: UniqueKey().toString(),
   //           fromItemId: from.id,
   //           toItemId: to.id,
   //           colorValue:
-  //               _currentArrowColor.value, // Використовуємо поточний колір
-  //           strokeWidth: _currentArrowWidth, // Використовуємо поточну товщину
+  //               _currentArrowColor.value,
+  //           strokeWidth: _currentArrowWidth,
   //         );
   //         widget.board!.links!.add(link);
   //       }

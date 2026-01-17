@@ -716,7 +716,7 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
     _webRTCManager = WebRTCManager(
       signalingServerUrl: 'wss://api.boardly.studio/ws',
       maxPeers: limit,
-      boardId: boardToHost.id ?? '', // 👈 обов’язково
+      boardId: boardToHost.id ?? '',
     );
 
     _webRTCManager?.onLimitReached = () {

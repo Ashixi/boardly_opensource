@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:boardly/screens/start_screen.dart';
-import 'package:boardly/services/localization.dart'; // Обов'язковий імпорт
+import 'package:boardly/services/localization.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
