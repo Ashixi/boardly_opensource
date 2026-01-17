@@ -25,7 +25,6 @@ def send_confirmation_email(to_email: str, code: str):
     
     server = None
     try:
-        # Встановлюємо timeout=15 секунд. 
         # Якщо за цей час SMTP не відповість — вискочить помилка, але сервіс не зависне.
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30)
         

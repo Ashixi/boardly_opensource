@@ -26,8 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Створення таблиць (якщо немає)
-# Base.metadata.create_all(bind=engine)systemctl restart  ashixi.service
 
 # Підключення роутів
 app.include_router(auth_routes.router, prefix="/auth")
