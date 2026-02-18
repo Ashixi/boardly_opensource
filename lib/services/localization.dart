@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-// Глобальна змінна, яка сповіщає систему про зміну мови
 final ValueNotifier<Locale> appLocale = ValueNotifier(const Locale('uk'));
 
 class S {
@@ -309,8 +308,123 @@ class S {
 
       "files_not_found": "Файлів не знайдено",
       "terms_and_policy": "Умови та Політика",
+
+      'folder_created_title': 'Папку створено!',
+      'folder_added_msg': 'додано в Explorer',
+      'support_author': 'Офіційний сайт',
+      'how_to_use_title': 'Швидкий старт в Boardly',
+      'how_to_use_welcome':
+          'Ласкаво просимо! Ось короткий гайд, щоб ви стали майстром Boardly.',
+      'section_start_screen': '🚀 Початок роботи (Стартовий екран)',
+      'card_create_host_title': 'Створити / Хостити',
+      'card_create_host_desc':
+          'Створіть нову дошку або виберіть папку з файлами на вашому пристрої, щоб поділитися нею з іншими.',
+      'card_join_title': 'Приєднатися (Join)',
+      'card_join_desc':
+          'Введіть ID дошки, який вам надав друг, щоб підключитися до вже існуючої сесії.',
+      'section_network': '🌐 Мережа та Синхронізація',
+      'card_network_status_title': 'Мережевий статус',
+      'card_network_status_desc':
+          'Натисніть цю кнопку, щоб вийти в мережу та з\'єднатися з іншими учасниками дошки.\n• Якщо хмаринка перекреслена — ви офлайн.\n• Якщо заповнена — синхронізацію активовано.',
+      'card_share_id_title': 'Поділитися ID',
+      'card_share_id_desc':
+          'Відкриває вікно з унікальним ID вашої дошки. Надішліть цей код друзям, щоб вони могли приєднатися.',
+      'section_sidebar': '🛠 Інструменти (Бічна панель)',
+      'card_explorer_title': 'Explorer (Провідник)',
+      'card_explorer_desc':
+          'Список усіх файлів на дошці. Дозволяє шукати файли за назвою та відкривати їх.',
+      'card_tags_title': 'Теги',
+      'card_tags_desc':
+          'Фільтрація файлів за хештегами. Додавайте теги через контекстне меню файлу.',
+      'card_participants_title': 'Учасники',
+      'card_participants_desc': 'Список людей, підключених до дошки зараз.',
+      'section_files': '✏️ Робота з файлами',
+      'card_arrows_title': 'Режим стрілок',
+      'card_arrows_desc':
+          'Вмикає малювання зв\'язків. Затисніть на файлі та тягніть до іншого, щоб створити стрілку.',
+      'card_new_file_title': 'Новий файл',
+      'card_new_file_desc': 'Створити пустий файл (txt, code) прямо тут.',
+      'card_upload_title': 'Завантажити',
+      'card_upload_desc': 'Додати існуючі файли з пам\'яті пристрою.',
+      'section_secrets': '📂 Секретні фішки',
+      'magic_f_key_title': 'Магічна клавіша \'F\' (Папки)',
+      'magic_f_key_desc':
+          'Boardly має унікальний спосіб групування:\n1. Затисніть та тримайте клавішу \'F\'.\n2. Клікайте по файлах, щоб обрати їх.\n3. Відпустіть \'F\' — файли перемістяться у нову фізичну папку.\n• Щоб відкрити цю папку як окрему дошку, знайдіть її в Explorer (бічне меню).',
+      'section_hotkeys': '⌨️ Гарячі клавіші',
+      'hotkey_pan': 'Переміщення полотна',
+      'hotkey_zoom': 'Зум (Наближення)',
+      'hotkey_folder': 'Створити папку',
+      'hotkey_minimap': 'Міні-мапа',
+      'hotkey_note': 'Додати замітку',
+      'hotkey_context': 'Контекстне меню',
+      'hotkey_open': 'Відкрити файл',
+      'footer_slogan': 'Boardly — твій простір без меж.',
+      'how_to_use': 'Як користуватися',
+      'create_new': 'Створити нову дошку',
+      'from_device': 'Взяти з пристрою',
+      "windows_lock_title": "Нюанс синхронізації",
+      "windows_lock_desc":
+          "Windows іноді блокує запис, якщо файл відкритий в іншій програмі. Якщо зміни не приходять або файл не оновлюється - спробуйте закрити його у зовнішньому редакторі і відкрити знову.",
     },
     'en': {
+      "windows_lock_title": "Synchronization Nuance",
+      "windows_lock_desc":
+          "Windows may sometimes block writing if a file is open in another program. If changes don’t appear or the file isn’t updating, try closing it in the external editor.",
+      'from_device': 'From device',
+      'create_new': 'Create new board',
+      'how_to_use': 'How to use',
+      'how_to_use_title': 'Boardly Quick Start',
+      'how_to_use_welcome':
+          'Welcome! Here is a short guide to help you become a Boardly master.',
+      'section_start_screen': '🚀 Getting Started (Start Screen)',
+      'card_create_host_title': 'Create / Host',
+      'card_create_host_desc':
+          'Create a new board or select a folder from your device to share it with others.',
+      'card_join_title': 'Join',
+      'card_join_desc':
+          'Enter the Board ID provided by a friend to connect to an existing session.',
+      'section_network': '🌐 Network & Sync',
+      'card_network_status_title': 'Network Status',
+      'card_network_status_desc':
+          'Click this button to go online and connect with other participants.\n• Crossed cloud: You are offline.\n• Filled cloud: Sync is active.',
+      'card_share_id_title': 'Share ID',
+      'card_share_id_desc':
+          'Opens a window with your unique Board ID. Send this code to friends so they can join.',
+      'section_sidebar': '🛠 Tools (Sidebar)',
+      'card_explorer_title': 'Explorer',
+      'card_explorer_desc':
+          'List of all files on the board. Search by name and open files here.',
+      'card_tags_title': 'Tags',
+      'card_tags_desc':
+          'Filter files by hashtags. Add tags via the file context menu.',
+      'card_participants_title': 'Participants',
+      'card_participants_desc':
+          'List of people currently connected to the board.',
+      'section_files': '✏️ Working with Files',
+      'card_arrows_title': 'Arrow Mode',
+      'card_arrows_desc':
+          'Enables link drawing. Hold on a file and drag to another to create an arrow.',
+      'card_new_file_title': 'New File',
+      'card_new_file_desc': 'Create an empty file (txt, code) right here.',
+      'card_upload_title': 'Upload',
+      'card_upload_desc': 'Add existing files from device storage.',
+      'section_secrets': '📂 Pro Tips',
+      'magic_f_key_title': 'Magic \'F\' Key (Folders)',
+      'magic_f_key_desc':
+          'Boardly has a unique grouping method:\n1. Hold the \'F\' key.\n2. Click files to select them.\n3. Release \'F\' — files will move into a new physical folder.\n• To open this folder as a separate board, find it in the Explorer.',
+      'section_hotkeys': '⌨️ Hotkeys',
+      'hotkey_pan': 'Pan Canvas',
+      'hotkey_zoom': 'Zoom',
+      'hotkey_folder': 'Create Folder',
+      'hotkey_minimap': 'Minimap',
+      'hotkey_note': 'Add Note',
+      'hotkey_context': 'Context Menu',
+      'hotkey_open': 'Open File',
+      'footer_slogan': 'Boardly — your space without limits.',
+      'support_author': 'Official Website',
+      'folder_created_title': 'Folder created!',
+      'folder_added_msg': 'added to Explorer',
+
       'files': 'Files',
       'tags_not_found': 'No tags found',
       'folders_not_found': 'No folders found',

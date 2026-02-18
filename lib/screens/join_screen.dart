@@ -3,7 +3,6 @@ import 'package:boardly/models/board_model.dart';
 import 'package:boardly/widgets/board_card.dart';
 import 'package:boardly/services/localization.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:boardly/services/board_api_service.dart'; // <--- Додати це
 import 'package:boardly/logger.dart';
 
@@ -34,7 +33,6 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _loadBoards() async {
-    // 1. Спочатку показуємо те, що є локально (кеш)
     if (_joinedBoards.isEmpty) {
       try {
         var allBoards = await BoardStorage.loadAllBoards();
@@ -43,52 +41,34 @@ class _JoinScreenState extends State<JoinScreen> {
             _joinedBoards = allBoards.where((b) => b.isJoined == true).toList();
           });
         }
-      } catch (e) {
-        // ігноруємо помилки локального завантаження на старті
-      }
+      } catch (e) {}
     }
 
-    // Не блокуємо UI лоадером, якщо дані вже є (Pull-to-refresh ефект)
     if (_joinedBoards.isEmpty) {
       setState(() => _isLoading = true);
     }
 
     final api = BoardApiService();
     try {
-      // 2. Отримуємо свіжі дані з сервера
       final serverBoardsData = await api.getJoinedBoards();
-      logger.i(
-        "Server returned ${serverBoardsData.length} boards",
-      ); // Лог для перевірки
+      logger.i("Server returned ${serverBoardsData.length} boards");
 
-      // 3. Формуємо новий список об'єктів BoardModel прямо з відповіді сервера
       List<BoardModel> freshJoinedBoards = [];
 
-      // Список ID для перевірки видалення
       Set<String> serverIds = {};
 
       for (var data in serverBoardsData) {
         final String id = data['id'];
-        final String title =
-            data['name']; // ВАЖЛИВО: Бекенд віддає 'name', а не 'title'
+        final String title = data['name'];
         serverIds.add(id);
 
-        final newBoard = BoardModel(
-          id: id,
-          title: title,
-          isJoined: true,
-          // Зберігаємо інші поля, якщо вони є локально (наприклад, шляхи до файлів)
-          // Але оскільки це join screen, шляхи підтягнуться пізніше
-        );
+        final newBoard = BoardModel(id: id, title: title, isJoined: true);
 
         freshJoinedBoards.add(newBoard);
 
-        // 4. Асинхронно оновлюємо кеш (зберігаємо на диск)
-        // Не чекаємо await, щоб не гальмувати UI, або чекаємо, якщо критично
         await BoardStorage.saveBoard(newBoard, isConnectedBoard: true);
       }
 
-      // 5. Видаляємо локально ті, яких немає на сервері (синхронізація видалення)
       var currentLocal = await BoardStorage.loadAllBoards();
       for (var local in currentLocal) {
         if (local.isJoined &&
@@ -98,7 +78,6 @@ class _JoinScreenState extends State<JoinScreen> {
         }
       }
 
-      // 6. ОНОВЛЮЄМО UI ДАНИМИ З СЕРВЕРА (Джерело правди)
       if (mounted) {
         setState(() {
           _joinedBoards = freshJoinedBoards;
@@ -118,7 +97,6 @@ class _JoinScreenState extends State<JoinScreen> {
 
   Future<void> _showJoinNewBoardDialog(BuildContext context) async {
     final idController = TextEditingController();
-    final titleController = TextEditingController();
 
     await showDialog(
       context: context,
@@ -133,16 +111,9 @@ class _JoinScreenState extends State<JoinScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   TextField(
-                    controller: titleController,
-                    decoration: InputDecoration(
-                      labelText: S.t('title_for_self'),
-                    ),
-                    autofocus: true,
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
                     controller: idController,
                     decoration: InputDecoration(labelText: S.t('board_id')),
+                    autofocus: true,
                   ),
                 ],
               ),
@@ -157,54 +128,43 @@ class _JoinScreenState extends State<JoinScreen> {
                           ? null
                           : () async {
                             final id = idController.text.trim();
-                            final title = titleController.text.trim();
-                            if (id.isEmpty || title.isEmpty) return;
+                            if (id.isEmpty) return;
 
-                            // 1. Запускаємо лоадер
                             setDialogState(() => isDialogLoading = true);
 
                             try {
                               final api = BoardApiService();
                               await api.joinBoard(id);
 
-                              final newBoard = BoardModel(
-                                id: id,
-                                title: title,
-                                isJoined: true,
-                              );
-
-                              await BoardStorage.saveBoard(
-                                newBoard,
-                                isConnectedBoard: true,
-                              );
-
-                              // 2. УСПІХ: Просто закриваємо діалог.
-                              // Не треба робити setDialogState(false), бо діалогу вже не буде.
                               if (mounted) Navigator.pop(context);
 
                               await _loadBoards();
                             } on BoardLimitException {
-                              // 3. ПОМИЛКА ЛІМІТУ: Діалог залишається відкритим?
-                              // Тут ви закриваєте діалог вручну, тому теж не треба оновлювати стан.
                               if (mounted) {
                                 Navigator.pop(context);
-                                // ... ваш код показу діалогу про ліміт ...
                                 showDialog(
                                   context: context,
                                   builder:
                                       (context) => AlertDialog(
-                                        // ... ваш код діалогу ...
+                                        title: const Text("Ліміт"),
+                                        content: const Text(
+                                          "Досягнуто ліміт дошок",
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed:
+                                                () => Navigator.pop(context),
+                                            child: const Text("OK"),
+                                          ),
+                                        ],
                                       ),
                                 );
                               }
                             } catch (e) {
-                              // 4. ІНША ПОМИЛКА: Діалог залишається, треба вимкнути спінер
                               if (mounted) {
-                                // Обгортаємо в try-catch на випадок, якщо юзер сам закрив діалог під час запиту
                                 try {
                                   setDialogState(() => isDialogLoading = false);
                                 } catch (_) {}
-
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text("${S.t('error_prefix')} $e"),
@@ -212,8 +172,6 @@ class _JoinScreenState extends State<JoinScreen> {
                                 );
                               }
                             }
-                            // 5. БЛОК FINALLY ВИДАЛЕНО
-                            // Ми керуємо станом спінера явно в блоках try/catch
                           },
                   child:
                       isDialogLoading

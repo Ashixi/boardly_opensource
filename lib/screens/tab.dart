@@ -90,26 +90,18 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
 
     final mainBoard = _boards[0];
 
-    // 2. Файли (без змін)
     final updatedItems =
         mainBoard.items
             .where((item) => connection.itemIds.contains(item.id))
             .map((item) => item.copyWith())
             .toList();
 
-    // 🔥 3. ВИПРАВЛЕНО: Фільтрація вкладених папок
-    // Беремо тільки ті папки, які є "дітьми" (повністю знаходяться всередині поточної)
     final childConnections =
         mainBoard.connections
             ?.where((conn) {
-              // Не показуємо саму себе
               if (conn.id == connection.id) return false;
 
-              // Перевірка на підмножину (Subset):
-              // Папка 'conn' є вкладеною в 'connection', тільки якщо ВСІ її файли
-              // знаходяться всередині 'connection'.
-              if (conn.itemIds.isEmpty)
-                return false; // Порожні папки ігноруємо або обробляємо окремо
+              if (conn.itemIds.isEmpty) return false;
 
               final isSubset = conn.itemIds.every(
                 (id) => connection.itemIds.contains(id),
@@ -128,7 +120,7 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         id: connection.id,
         title: connection.name,
         items: updatedItems,
-        connections: childConnections, // Передаємо "чистий" список дітей
+        connections: childConnections,
         isConnectionBoard: true,
         connectionId: connection.id,
         links: connection.links ?? [],
@@ -163,6 +155,13 @@ class _CanvasTabbedBoardState extends State<CanvasTabbedBoard> {
         final connection = mainBoard.connections![connIndex];
         connection.links = updatedBoard.links ?? [];
         connection.itemIds = updatedBoard.items.map((e) => e.id).toList();
+
+        final activeItemIds = updatedBoard.items.map((i) => i.id).toSet();
+
+        mainBoard.items.removeWhere((item) {
+          return item.connectionId == updatedBoard.connectionId &&
+              !activeItemIds.contains(item.id);
+        });
 
         for (final updatedItem in updatedBoard.items) {
           final mainItemIndex = mainBoard.items.indexWhere(

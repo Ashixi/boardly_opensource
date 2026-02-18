@@ -128,7 +128,7 @@ msix_config:
   publisher_display_name: "SHAS" 
   identity_name: "SHAS.Boardly"         
   publisher: "CN=33C7FF07-F01D-4B61-ACDF-9499837A64E5"              
-  msix_version: 1.0.5.0
+  msix_version: 1.1.1.0
   
   logo_path: assets/icons/logo_avatar_circle.png
   store: true

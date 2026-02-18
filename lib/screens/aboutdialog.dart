@@ -25,7 +25,7 @@ class AboutAppDialog extends StatelessWidget {
           children: [
             Column(
               children: [
-                // 1. HEADER
+                // 1. HEADER (Logo & Version)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 36, 24, 0),
                   child: Column(
@@ -57,6 +57,7 @@ class AboutAppDialog extends StatelessWidget {
 
                 const Divider(),
 
+                // 2. SCROLLABLE CONTENT
                 Expanded(
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
@@ -78,7 +79,7 @@ class AboutAppDialog extends StatelessWidget {
                         const SizedBox(height: 16),
                         Text(
                           "Boardly allows you to capture ideas and sketch in real-time. \n\n"
-                          "All your data is protected with end-to-end encryption, ensuring complete privacy while you collaborate seamlessly across devices.",
+                          "All your data is protected with end-to-end encryption.",
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: 16,
@@ -89,31 +90,80 @@ class AboutAppDialog extends StatelessWidget {
 
                         const SizedBox(height: 48),
 
+                        // --- CORE TEAM SECTION ---
                         _buildCreditItem(
                           role: "Created & Developed by",
                           name: "Andrii Shumko",
-                          instagramLink:
-                              "https://www.instagram.com/andrii_shumko/",
+                          linkUrl: "https://www.instagram.com/andrii_shumko/",
+                          linkIcon: FontAwesomeIcons.instagram,
                           primaryColor: primaryColor,
                         ),
 
-                        _buildCreditItem(
-                          role: "Special Thanks & QA",
+                        // Grouping QA together
+                        Text(
+                          "QA & SUPPORT TEAM",
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey,
+                            letterSpacing: 2.0,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Mykhailo
+                        _buildCompactMember(
                           name: "Mykhailo Klymenko",
-                          note: "For invaluable support and testing.",
+                          note: "QA & Testing",
                           primaryColor: primaryColor,
                         ),
+                        const SizedBox(height: 16),
 
-                        _buildCreditItem(
-                          role: "Visual Identity (Logo & Icons)",
-                          name: "Natalia Kolomiichuk",
-                          instagramLink:
-                              "https://www.instagram.com/design_by_kolomiichuk/",
+                        // Illia (Added)
+                        _buildCompactMember(
+                          name: "Andreluka Illia",
+                          note: "QA & Testing",
+                          linkUrl: "https://www.linkedin.com/in/illiaandreluka",
+                          linkIcon: FontAwesomeIcons.linkedin,
                           primaryColor: primaryColor,
                         ),
 
                         const SizedBox(height: 32),
 
+                        // --- SEPARATOR FOR DESIGNER ---
+                        Row(
+                          children: [
+                            Expanded(child: Divider(color: Colors.grey[300])),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Icon(
+                                Icons.brush,
+                                size: 16,
+                                color: Colors.grey[400],
+                              ),
+                            ),
+                            Expanded(child: Divider(color: Colors.grey[300])),
+                          ],
+                        ),
+                        const SizedBox(height: 32),
+
+                        // --- DESIGNER (Separate Block) ---
+                        _buildCreditItem(
+                          role: "Visual Identity",
+                          name: "Natalia Kolomiichuk",
+                          note: "Logo & Icon Design", // Added context
+                          linkUrl:
+                              "https://www.instagram.com/design_by_kolomiichuk/",
+                          linkIcon: FontAwesomeIcons.instagram,
+                          primaryColor:
+                              primaryColor, // Or maybe a slightly different shade to distinguish?
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // Resources
                         Text(
                           "Resources & Assets",
                           style: TextStyle(
@@ -145,6 +195,7 @@ class AboutAppDialog extends StatelessWidget {
 
                 const Divider(height: 1),
 
+                // 3. FOOTER
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     vertical: 20.0,
@@ -190,10 +241,12 @@ class AboutAppDialog extends StatelessWidget {
     );
   }
 
+  // Updated to support generic Links and Icons
   Widget _buildCreditItem({
     required String role,
     required String name,
-    String? instagramLink,
+    String? linkUrl,
+    IconData? linkIcon,
     String? note,
     required Color primaryColor,
   }) {
@@ -216,10 +269,7 @@ class AboutAppDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               InkWell(
-                onTap:
-                    instagramLink != null
-                        ? () => _launchURL(instagramLink)
-                        : null,
+                onTap: linkUrl != null ? () => _launchURL(linkUrl) : null,
                 borderRadius: BorderRadius.circular(4),
                 child: Text(
                   name,
@@ -230,12 +280,12 @@ class AboutAppDialog extends StatelessWidget {
                   ),
                 ),
               ),
-              if (instagramLink != null) ...[
+              if (linkUrl != null && linkIcon != null) ...[
                 const SizedBox(width: 10),
                 GestureDetector(
-                  onTap: () => _launchURL(instagramLink),
+                  onTap: () => _launchURL(linkUrl),
                   child: FaIcon(
-                    FontAwesomeIcons.instagram,
+                    linkIcon,
                     size: 22,
                     color: primaryColor.withOpacity(0.8),
                   ),
@@ -256,6 +306,51 @@ class AboutAppDialog extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+
+  // New compact builder for the Team/QA members to keep them closer together
+  Widget _buildCompactMember({
+    required String name,
+    required String note,
+    required Color primaryColor,
+    String? linkUrl,
+    IconData? linkIcon,
+  }) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              onTap: linkUrl != null ? () => _launchURL(linkUrl) : null,
+              borderRadius: BorderRadius.circular(4),
+              child: Text(
+                name,
+                style: TextStyle(
+                  fontSize: 18, // Slightly smaller than the Lead/Designer
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+            ),
+            if (linkUrl != null && linkIcon != null) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _launchURL(linkUrl),
+                child: FaIcon(
+                  linkIcon,
+                  size: 18,
+                  color: primaryColor.withOpacity(0.8),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 2),
+        Text(note, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+      ],
     );
   }
 

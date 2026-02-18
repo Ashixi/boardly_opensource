@@ -1,6 +1,7 @@
 import 'package:boardly/data/board_storage.dart';
 import 'package:boardly/logger.dart';
 import 'package:boardly/models/board_model.dart';
+// import 'package:boardly/moderd_model.dart';
 import 'package:boardly/screens/aboutdialog.dart';
 import 'package:boardly/screens/host_screen.dart';
 import 'package:boardly/screens/join_screen.dart';
@@ -15,7 +16,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
-
+import 'package:path/path.dart' as path;
+import 'package:boardly/screens/how_to_use_screen.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
@@ -461,7 +463,7 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
     try {
       final path = await BoardStorage.getBoardFilesDir(
         boardId,
-        isConnected: isConnected,
+        isConnectedBoard: isConnected,
       );
       final dir = Directory(path);
       if (!await dir.exists()) return 0;
@@ -524,22 +526,6 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
       });
     }
   }
-
-  // void _handleLogoTap() {
-  //   final now = DateTime.now();
-  //   if (_lastLogoTapTime != null &&
-  //       now.difference(_lastLogoTapTime!) > const Duration(seconds: 1)) {
-  //     _logoTapCount = 0;
-  //   }
-
-  //   _lastLogoTapTime = now;
-  //   _logoTapCount++;
-
-  //   if (_logoTapCount >= 10) {
-  //     _logoTapCount = 0;
-  //     _showContributorsDialog();
-  //   }
-  // }
 
   Future<void> _updateUsername(String newName) async {
     final client = AuthHttpClient();
@@ -816,6 +802,83 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _hostExistingBoard(BoardModel board) async {
+    final userData = await AuthStorage.getUserData();
+    if (userData == null || userData.publicId.isEmpty) {
+      throw Exception("User data not found");
+    }
+
+    final boardApi = BoardApiService();
+
+    try {
+      final serverBoardData = await boardApi.createBoard(
+        board.title ?? "Hosted Board",
+      );
+      final String newServerId = serverBoardData['id'];
+      final String oldId = board.id!;
+
+      logger.i("Promoting board $oldId to server board $newServerId");
+
+      final String oldPath = await BoardStorage.getBoardDir(oldId);
+      final Directory oldDir = Directory(oldPath);
+
+      if (await oldDir.exists()) {
+        String safeTitle =
+            (board.title ?? "Board")
+                .replaceAll(RegExp(r'[<>:"/\\|?*]'), '')
+                .trim();
+        if (safeTitle.isEmpty) safeTitle = "Board";
+
+        final String newFolderName = "${safeTitle}_$newServerId";
+        final String parentDir = oldDir.parent.path;
+        final String newPath = path.join(parentDir, newFolderName);
+
+        await oldDir.rename(newPath);
+        logger.i("Renamed folder to $newPath");
+      }
+
+      board.id = newServerId;
+      board.ownerId = userData.publicId;
+
+      await BoardStorage.saveBoard(board, isConnectedBoard: false);
+
+      await _loadStats();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              S.t('board_promoted_success') ?? "Дошка успішно опублікована!",
+            ),
+          ),
+        );
+      }
+    } on BoardLimitException {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder:
+              (ctx) => AlertDialog(
+                title: Text(S.t('limit_reached') ?? "Ліміт вичерпано"),
+                content: Text(
+                  S.t('limit_host_desc') ??
+                      "Ви досягли ліміту для вашого тарифу.",
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text(S.t('cancel') ?? "OK"),
+                  ),
+                ],
+              ),
+        );
+      }
+    } catch (e) {
+      logger.e("Error hosting existing board: $e");
+      rethrow;
+    }
+  }
+
   void _navigateToMyBoardsScreen() {
     Navigator.push(
       context,
@@ -887,6 +950,7 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
               (context) => HostScreen(
                 onOpenAndHostBoard: _openAndHostBoard,
                 onAddNewAndHostBoard: _createAndSaveHostingBoard,
+                onHostExistingBoard: _hostExistingBoard,
                 onDeleteBoard: _deleteBoardForHostScreen,
                 isPro: _userData?.isPro ?? false,
               ),
@@ -896,7 +960,6 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
   }
 
   void _navigateToJoinScreen() {
-    // 1. ПЕРЕВІРКА АВТОРИЗАЦІЇ
     if (!_isLoggedIn) {
       showDialog(
         context: context,
@@ -1065,37 +1128,6 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
               },
             ),
           ),
-
-          ListTile(
-            leading: const Icon(Icons.workspace_premium, color: Colors.amber),
-            title: Text(
-              S.t('manage_subscription'),
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(S.t('subscription_settings')),
-            onTap: () async {
-              String urlString;
-              if (appLocale.value.languageCode == 'uk') {
-                urlString = "https://boardly.studio/ua/profile.html";
-              } else {
-                urlString = "https://boardly.studio/en/login.html";
-              }
-
-              final Uri url = Uri.parse(urlString);
-
-              if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Не вдалося відкрити сторінку"),
-                    ),
-                  );
-                }
-              }
-            },
-          ),
-
-          // --------------------------------------------------
           const Divider(),
           ListTile(
             leading: const Icon(Icons.lock_reset, color: Colors.orange),
@@ -1496,25 +1528,29 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 50),
+
+                    const SizedBox(height: 30),
+
                     if (_rootDirectory != null)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 8.0),
+                        padding: const EdgeInsets.only(bottom: 4.0),
                         child: Text(
                           "📂 $_rootDirectory",
                           style: const TextStyle(
                             color: Colors.grey,
-                            fontSize: 13,
+                            fontSize: 12,
                           ),
                           textAlign: TextAlign.center,
                         ),
                       ),
+
+                    // Кнопка зміни директорії
                     TextButton.icon(
                       onPressed: _pickRootDirectory,
                       icon: Icon(
                         Icons.folder_open,
                         color: Colors.grey[700],
-                        size: 24,
+                        size: 22,
                       ),
                       label: Text(
                         _rootDirectory == null
@@ -1522,49 +1558,103 @@ class _AddboardState extends State<Addboard> with WidgetsBindingObserver {
                             : S.t('change_dir'),
                         style: TextStyle(
                           color: Colors.grey[800],
-                          fontSize: 16,
+                          fontSize: 15,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 18,
+                          vertical: 12,
+                          horizontal: 24,
                         ),
-                        backgroundColor: Colors.transparent,
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    Center(
-                      child: TextButton.icon(
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (context) => const AboutAppDialog(),
+
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const HowToUseScreen(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.school_outlined,
+                        color: Colors.teal,
+                        size: 22,
+                      ),
+                      label: Text(
+                        S.t('how_to_use'),
+                        style: TextStyle(
+                          color: Colors.grey[800],
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 24,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () async {
+                        const urlString = "https://boardly.studio/";
+                        final Uri url = Uri.parse(urlString);
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(
+                            url,
+                            mode: LaunchMode.externalApplication,
                           );
-                        },
-                        icon: Icon(
-                          Icons.info_outline,
-                          color: Colors.grey[700],
-                          size: 24,
+                        }
+                      },
+                      icon: const Icon(
+                        Icons.favorite_border,
+                        color: Colors.redAccent,
+                        size: 22,
+                      ),
+                      label: Text(
+                        S.t('support_author'),
+                        style: TextStyle(
+                          color: Colors.grey[800],
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
                         ),
-                        label: Text(
-                          S.t('about_title'),
-                          style: TextStyle(
-                            color: Colors.grey[800],
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 24,
                         ),
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 32,
-                            vertical: 18,
-                          ),
-                          backgroundColor: Colors.transparent,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(343),
-                          ),
+                      ),
+                    ),
+                    // Кнопка About
+                    TextButton.icon(
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => const AboutAppDialog(),
+                        );
+                      },
+                      icon: Icon(
+                        Icons.info_outline,
+                        color: Colors.grey[700],
+                        size: 22,
+                      ),
+                      label: Text(
+                        S.t('about_title'),
+                        style: TextStyle(
+                          color: Colors.grey[800],
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 24,
                         ),
                       ),
                     ),

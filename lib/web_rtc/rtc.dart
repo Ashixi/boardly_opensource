@@ -2,11 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui';
+import 'dart:collection';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
+
 import 'package:boardly/models/connection_model.dart';
 import 'package:boardly/logger.dart';
 import 'package:boardly/models/board_items.dart';
@@ -24,17 +26,25 @@ class WebRTCManager {
   String? _myPublicId;
   String? _myUsername;
 
+  final Queue<Future<void> Function()> _outgoingQueue = Queue();
+  bool _isProcessingOutgoing = false;
+
+  final Queue<Future<void> Function()> _incomingQueue = Queue();
+  bool _isProcessingIncoming = false;
+
   final Map<String, RTCPeerConnection?> _peerConnections = {};
   final Map<String, RTCDataChannel?> _dataChannels = {};
+
   final List<Map<String, dynamic>> _pendingMessages = [];
-  final List<Map<String, dynamic>> _pendingFiles = [];
   final Map<String, List<Map<String, dynamic>>> _peerPendingMessages = {};
   final Map<String, List<RTCIceCandidate>> _pendingCandidates = {};
 
   final List<Function(String)> _onConnectedListeners = [];
   final List<VoidCallback> _onDisconnectedListeners = [];
 
-  Function(String peerId, Map<String, dynamic> data)? _onDataReceived;
+  Future<void> Function(String peerId, Map<String, dynamic> data)?
+  _onDataReceived;
+
   Function(String peerId)? onConnected;
   Function(String peerId)? onDataChannelOpen;
   Function()? onDisconnected;
@@ -79,6 +89,7 @@ class WebRTCManager {
 
       _channel = IOWebSocketChannel(socket);
       _isConnected = true;
+      _hasConnectedOnce = true;
 
       _channel!.stream.listen(
         (message) {
@@ -111,25 +122,23 @@ class WebRTCManager {
   }
 
   void disconnect() {
-    for (final channel in _dataChannels.values) {
-      try {
-        channel?.close();
-      } catch (_) {}
-    }
+    logger.i("🔌 RTC Disconnecting...");
+    _dataChannels.values.forEach((c) => c?.close());
     _dataChannels.clear();
-    for (final pc in _peerConnections.values) {
-      try {
-        pc?.close();
-      } catch (_) {}
-    }
+
+    _peerConnections.values.forEach((c) => c?.close());
     _peerConnections.clear();
+
     _channel?.sink.close();
     _channel = null;
-    _pendingCandidates.clear();
-    _peerPendingMessages.clear();
-    _pendingMessages.clear();
-    _pendingFiles.clear();
 
+    _incomingQueue.clear();
+    _outgoingQueue.clear();
+    _pendingMessages.clear();
+    _peerPendingMessages.clear();
+    _pendingCandidates.clear();
+
+    logger.i("✅ RTC Disconnected completely.");
     _notifyDisconnected();
   }
 
@@ -137,18 +146,86 @@ class WebRTCManager {
     if (!_isConnected) return;
     _isConnected = false;
     _myPeerId = null;
-    for (var listener in _onDisconnectedListeners) {
-      listener();
+    for (var listener in _onDisconnectedListeners) listener();
+    onDisconnected?.call();
+  }
+
+  void scheduleTask(Future<void> Function() task) {
+    _outgoingQueue.add(task);
+    _processOutgoingQueue();
+  }
+
+  Future<void> _processOutgoingQueue() async {
+    if (_isProcessingOutgoing) return;
+    _isProcessingOutgoing = true;
+
+    while (_outgoingQueue.isNotEmpty) {
+      try {
+        final task = _outgoingQueue.removeFirst();
+        await task();
+        await Future.delayed(const Duration(milliseconds: 50));
+      } catch (e) {
+        logger.e("Error executing queued task: $e");
+      }
+    }
+    _isProcessingOutgoing = false;
+  }
+
+  Future<void> _processIncomingQueue() async {
+    if (_isProcessingIncoming) return;
+    _isProcessingIncoming = true;
+
+    while (_incomingQueue.isNotEmpty) {
+      try {
+        final task = _incomingQueue.removeFirst();
+        await task();
+      } catch (e) {
+        logger.e("Error processing incoming message: $e");
+      }
+    }
+    _isProcessingIncoming = false;
+  }
+
+  void _handleSignalingMessage(Map<String, dynamic> data) {
+    final type = data['type'];
+    switch (type) {
+      case 'connected':
+        _handleConnectedMessage(data);
+        break;
+      case 'new-peer':
+        logger.i("New peer: ${data['peer_id']}");
+        break;
+      case 'offer':
+        _handleOfferMessage(data);
+        break;
+      case 'answer':
+        _handleAnswerMessage(data);
+        break;
+      case 'candidate':
+        _handleCandidateMessage(data);
+        break;
+      case 'peer-left':
+        _removePeer(data['from']);
+        break;
+      case 'request-slot':
+        _handleRequestSlot(data);
+        break;
+      case 'offer-slot':
+        _handleOfferSlot(data);
+        break;
+      case 'session-full':
+        onSessionFull?.call();
+        break;
+      case 'kick':
+        disconnect();
+        break;
     }
   }
 
   void _handleConnectedMessage(Map<String, dynamic> data) {
     _myPeerId = data['peer_id'];
     _isConnected = true;
-
-    for (var listener in _onConnectedListeners) {
-      listener(_myPeerId!);
-    }
+    for (var listener in _onConnectedListeners) listener(_myPeerId!);
 
     final rawPeers = List<String>.from(data['existing_peers'] ?? []);
     final existingPeers = rawPeers.where((id) => id != _myPeerId).toList();
@@ -164,25 +241,15 @@ class WebRTCManager {
     }
   }
 
-  void disconnectPeer(String peerId) {
-    _sendSignalingMessage({'type': 'kick', 'to': peerId, 'from': _myPeerId});
-    _removePeer(peerId);
-  }
-
   void _handleRequestSlot(Map<String, dynamic> data) {
     if (_dataChannels.length < maxPeers) {
-      final requesterId = data['from'];
-      logger.i("RTC: Accepted slot request from $requesterId");
       _sendSignalingMessage({
         'type': 'offer-slot',
-        'to': requesterId,
+        'to': data['from'],
         'from': _myPeerId,
       });
     } else {
-      logger.w("RTC: Rejected slot request (Max connections reached).");
-
       onHostLimitReached?.call();
-
       _sendSignalingMessage({
         'type': 'session-full',
         'to': data['from'],
@@ -191,201 +258,115 @@ class WebRTCManager {
     }
   }
 
-  String _generateMsgId() {
-    return const Uuid().v4();
-  }
-
   void _handleOfferSlot(Map<String, dynamic> data) {
-    final potentialParentId = data['from'];
-
-    if (potentialParentId == _myPeerId) {
-      return;
-    }
-
-    if (_dataChannels.length < 3) {
-      if (!_dataChannels.containsKey(potentialParentId)) {
-        logger.i("RTC: Connecting to mesh peer: $potentialParentId");
-        _createPeerConnection(potentialParentId, true);
-      } else {
-        logger.w("RTC: Already connected/connecting to $potentialParentId");
-      }
-    }
-  }
-
-  void _handleSignalingMessage(Map<String, dynamic> data) {
-    final type = data['type'];
-    if (type != 'candidate') {
-      logger.i("📥 RTC MSG: $type from ${data['from'] ?? 'server'}");
-    }
-
-    switch (type) {
-      case 'connected':
-        _handleConnectedMessage(data);
-        break;
-      case 'new-peer':
-        logger.i(
-          "RTC: 👋 New peer joined the room: ${data['peer_id'] ?? data['from']}",
-        );
-        break;
-      case 'offer':
-        _handleOfferMessage(data);
-        break;
-      case 'answer':
-        _handleAnswerMessage(data);
-        break;
-      case 'candidate':
-        _handleCandidateMessage(data);
-        break;
-      case 'peer-left':
-        logger.i("RTC: Peer left: ${data['from']}");
-        _removePeer(data['from']);
-        break;
-      case 'request-slot':
-        _handleRequestSlot(data);
-        break;
-      case 'offer-slot':
-        _handleOfferSlot(data);
-        break;
-      case 'session-full':
-        logger.w("RTC: Session is full. Access denied.");
-        onSessionFull?.call();
-        break;
-      case 'kick':
-        logger.w("⚠️ You have been disconnected by the host.");
-        disconnect();
-        break;
+    if (data['from'] != _myPeerId &&
+        _dataChannels.length < maxPeers &&
+        !_dataChannels.containsKey(data['from'])) {
+      _createPeerConnection(data['from'], true);
     }
   }
 
   Future<void> _handleOfferMessage(Map<String, dynamic> data) async {
     final peerId = data['from'];
-    final offer = data['offer'];
-    logger.i("RTC: Handling OFFER from $peerId");
-
     final pc = await _createPeerConnection(peerId, false);
     if (pc == null) return;
 
-    try {
-      await pc.setRemoteDescription(
-        RTCSessionDescription(offer['sdp'], offer['type']),
-      );
-      if (_pendingCandidates.containsKey(peerId)) {
-        for (final candidate in _pendingCandidates[peerId]!) {
-          await pc.addCandidate(candidate);
-        }
-        _pendingCandidates.remove(peerId);
+    await pc.setRemoteDescription(
+      RTCSessionDescription(data['offer']['sdp'], data['offer']['type']),
+    );
+
+    if (_pendingCandidates.containsKey(peerId)) {
+      for (final c in _pendingCandidates[peerId]!) {
+        await pc.addCandidate(c);
       }
-      final answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      _sendSignalingMessage({
-        'type': 'answer',
-        'answer': {'sdp': answer.sdp, 'type': answer.type},
-        'to': peerId,
-      });
-    } catch (e) {
-      logger.e('Error handling offer: $e');
+      _pendingCandidates.remove(peerId);
     }
+
+    final answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    _sendSignalingMessage({
+      'type': 'answer',
+      'answer': {'sdp': answer.sdp, 'type': answer.type},
+      'to': peerId,
+    });
   }
 
   Future<void> _handleAnswerMessage(Map<String, dynamic> data) async {
-    final peerId = data['from'];
-    final answer = data['answer'];
-    logger.i("RTC: Handling ANSWER from $peerId");
-
-    final pc = _peerConnections[peerId];
-    if (pc == null) return;
-    try {
+    final pc = _peerConnections[data['from']];
+    if (pc != null) {
       await pc.setRemoteDescription(
-        RTCSessionDescription(answer['sdp'], answer['type']),
+        RTCSessionDescription(data['answer']['sdp'], data['answer']['type']),
       );
-    } catch (e) {
-      logger.e('Error handling answer: $e');
     }
   }
 
   Future<void> _handleCandidateMessage(Map<String, dynamic> data) async {
     final peerId = data['from'];
-    final candidateMap = data['candidate'];
     final candidate = RTCIceCandidate(
-      candidateMap['candidate'],
-      candidateMap['sdpMid'],
-      candidateMap['sdpMLineIndex'],
+      data['candidate']['candidate'],
+      data['candidate']['sdpMid'],
+      data['candidate']['sdpMLineIndex'],
     );
-    final pc = _peerConnections[peerId];
 
-    if (pc == null || (await pc.getRemoteDescription()) == null) {
-      if (!_pendingCandidates.containsKey(peerId)) {
-        _pendingCandidates[peerId] = [];
-      }
-      _pendingCandidates[peerId]!.add(candidate);
-      return;
+    final pc = _peerConnections[peerId];
+    if (pc == null || await pc.getRemoteDescription() == null) {
+      _pendingCandidates.putIfAbsent(peerId, () => []).add(candidate);
+    } else {
+      await pc.addCandidate(candidate);
     }
-    await pc.addCandidate(candidate);
   }
 
   Future<RTCPeerConnection?> _createPeerConnection(
     String peerId,
     bool isOffer,
   ) async {
-    try {
-      final configuration = <String, dynamic>{
-        'iceServers': [
-          {'urls': 'stun:stun.l.google.com:19302'},
-          {
-            'urls': 'turn:178.18.253.94:3478',
-            'username': 'admin',
-            'credential': 'password123',
-          },
-        ],
-        'iceTransportPolicy': 'all',
-      };
+    final pc = await createPeerConnection({
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+    }, {});
 
-      final pc = await createPeerConnection(configuration, {});
-      _peerConnections[peerId] = pc;
+    _peerConnections[peerId] = pc;
 
-      pc.onIceCandidate = (candidate) {
-        _sendSignalingMessage({
+    pc.onIceCandidate =
+        (c) => _sendSignalingMessage({
           'type': 'candidate',
           'candidate': {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
+            'candidate': c.candidate,
+            'sdpMid': c.sdpMid,
+            'sdpMLineIndex': c.sdpMLineIndex,
           },
           'to': peerId,
         });
-      };
 
-      pc.onIceConnectionState = (state) {
-        logger.i("RTC: ICE Connection State with $peerId: $state");
-        if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-          pc.restartIce();
-        }
-      };
-
-      await _addDataChannel(peerId, isOffer);
-
-      if (isOffer) {
-        final offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        _sendSignalingMessage({
-          'type': 'offer',
-          'offer': {'sdp': offer.sdp, 'type': offer.type},
-          'to': peerId,
-        });
+    pc.onIceConnectionState = (s) {
+      logger.d('RTC: ICE State with $peerId: $s');
+      if (s == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        pc.restartIce();
       }
-      return pc;
-    } catch (e) {
-      logger.e('Error creating PC: $e');
-      return null;
+    };
+
+    await _addDataChannel(peerId, isOffer);
+
+    if (isOffer) {
+      final offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      _sendSignalingMessage({
+        'type': 'offer',
+        'offer': {'sdp': offer.sdp, 'type': offer.type},
+        'to': peerId,
+      });
     }
+
+    return pc;
   }
 
   Future<void> _addDataChannel(String peerId, bool isOffer) async {
     final pc = _peerConnections[peerId];
-    if (pc == null) return;
-
     if (isOffer) {
-      final dc = await pc.createDataChannel(
+      final dc = await pc!.createDataChannel(
         'noty',
         RTCDataChannelInit()..ordered = true,
       );
@@ -393,9 +374,9 @@ class WebRTCManager {
       _dataChannels[peerId] = dc;
     }
 
-    pc.onDataChannel = (channel) {
-      _setupDataChannelCallbacks(channel, peerId);
-      _dataChannels[peerId] = channel;
+    pc!.onDataChannel = (dc) {
+      _setupDataChannelCallbacks(dc, peerId);
+      _dataChannels[peerId] = dc;
     };
   }
 
@@ -408,10 +389,8 @@ class WebRTCManager {
           "✅✅✅ LINK ESTABLISHED with $peerId. Sending pending messages...",
         );
         onDataChannelOpen?.call(peerId);
-
         _processPendingMessages(peerId);
       } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
-        logger.w("RTC: Link closed with $peerId");
         _removePeer(peerId);
       }
     };
@@ -422,6 +401,7 @@ class WebRTCManager {
         final String? msgId = data['msgId'];
         final String? toUser = data['to'];
 
+        // Дедуплікація повідомлень
         if (msgId != null) {
           if (_processedMessageIds.contains(msgId)) return;
           _processedMessageIds.add(msgId);
@@ -430,6 +410,7 @@ class WebRTCManager {
           }
         }
 
+        // Релей (Mesh network)
         if (data['target'] == 'broadcast') {
           _relayToNeighbors(message.text, excludePeerId: peerId);
         }
@@ -438,23 +419,67 @@ class WebRTCManager {
           return;
         }
 
-        _onDataReceived?.call(peerId, data);
+        _incomingQueue.add(() async {
+          await _onDataReceived?.call(peerId, data);
+        });
+        _processIncomingQueue();
       } catch (e) {
         logger.e('Data channel message error: $e');
       }
     };
   }
 
+  Future<void> syncBoardSmartly(
+    String targetPeerId,
+    List<BoardItem> itemsToSync,
+    List<Connection> connectionsToSync,
+    String? myPeerId,
+  ) async {
+    logger.i(
+      "🚀 [Smart Sync] Starting synchronization for ${itemsToSync.length} items...",
+    );
+
+    for (final conn in connectionsToSync) {
+      sendMessageToPeer(targetPeerId, {
+        'type': 'folder-create',
+        'folder': conn.toJson(),
+      });
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    final sortedItems = List<BoardItem>.from(itemsToSync);
+    sortedItems.sort((a, b) {
+      if (a.connectionId == null && b.connectionId != null) return -1;
+      if (a.connectionId != null && b.connectionId == null) return 1;
+      return 0;
+    });
+
+    for (final item in sortedItems) {
+      if (item.type == 'folder') continue;
+
+      final file = File(item.originalPath);
+      if (!await file.exists()) continue;
+
+      await sendFileToPeer(
+        targetPeerId,
+        item.originalPath,
+        item.fileName,
+        file,
+        fileId: item.id,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+
+    logger.i("✅ [Smart Sync] Completed.");
+  }
+
   void _relayToNeighbors(String jsonMessage, {required String excludePeerId}) {
     for (final entry in _dataChannels.entries) {
-      final targetId = entry.key;
-      final channel = entry.value;
-
-      if (targetId == excludePeerId) continue;
-
-      if (channel?.state == RTCDataChannelState.RTCDataChannelOpen) {
+      if (entry.key == excludePeerId) continue;
+      if (entry.value?.state == RTCDataChannelState.RTCDataChannelOpen) {
         try {
-          channel?.send(RTCDataChannelMessage(jsonMessage));
+          entry.value?.send(RTCDataChannelMessage(jsonMessage));
         } catch (_) {}
       }
     }
@@ -486,46 +511,28 @@ class WebRTCManager {
         channel?.send(RTCDataChannelMessage(jsonEncode(message)));
       } catch (_) {}
     } else {
-      if (!_peerPendingMessages.containsKey(peerId)) {
-        _peerPendingMessages[peerId] = [];
-      }
-      _peerPendingMessages[peerId]!.add(message);
+      _peerPendingMessages.putIfAbsent(peerId, () => []).add(message);
     }
   }
 
   void _broadcastMessage(Map<String, dynamic> message) {
-    if (!message.containsKey('msgId')) {
-      message['msgId'] = _generateMsgId();
-    }
-    if (!message.containsKey('target')) {
-      message['target'] = 'broadcast';
-    }
+    if (!message.containsKey('msgId')) message['msgId'] = const Uuid().v4();
+    if (!message.containsKey('target')) message['target'] = 'broadcast';
 
-    final msgId = message['msgId'];
-    _processedMessageIds.add(msgId);
+    _processedMessageIds.add(message['msgId']);
 
     final openChannels =
         _dataChannels.values
             .where((c) => c?.state == RTCDataChannelState.RTCDataChannelOpen)
             .toList();
-
     if (openChannels.isEmpty) {
       _pendingMessages.add(message);
       return;
     }
-
-    bool sentAny = false;
     for (final channel in openChannels) {
       try {
         channel?.send(RTCDataChannelMessage(jsonEncode(message)));
-        sentAny = true;
-      } catch (e) {
-        logger.e("RTC: Send failed: $e");
-      }
-    }
-
-    if (!sentAny) {
-      _pendingMessages.add(message);
+      } catch (_) {}
     }
   }
 
@@ -541,6 +548,11 @@ class WebRTCManager {
     _pendingCandidates.remove(peerId);
   }
 
+  void disconnectPeer(String peerId) {
+    _sendSignalingMessage({'type': 'kick', 'to': peerId, 'from': _myPeerId});
+    _removePeer(peerId);
+  }
+
   Future<void> broadcastFile(
     String originalPath,
     String fileName,
@@ -551,15 +563,10 @@ class WebRTCManager {
     final fileId =
         customFileId ??
         '${originalPath}_${DateTime.now().millisecondsSinceEpoch}';
-
-    if (!await file.exists()) {
-      logger.e("❌ File not found for announcing: ${file.path}");
-      return;
-    }
-
+    if (!await file.exists()) return;
     final int fileSize = await file.length();
 
-    final announcement = {
+    _broadcastMessage({
       'type': 'file-available',
       'fileId': fileId,
       'fileName': fileName,
@@ -568,26 +575,19 @@ class WebRTCManager {
       'originalPath': originalPath,
       'ownerPeerId': _myPeerId,
       'target': 'broadcast',
-      'msgId': _generateMsgId(),
+      'msgId': const Uuid().v4(),
       'isInitial': false,
-    };
-
-    _broadcastMessage(announcement);
-    logger.i(
-      "📢 Announced file availability: $fileName (Size: $fileSize, Hash: $fileHash)",
-    );
+    });
   }
 
   void requestFile(String targetPeerId, String fileId, String fileName) {
-    logger.i("📥 REQUEST: Asking $targetPeerId for file $fileName");
-
     _broadcastMessage({
       'type': 'request-file',
       'fileId': fileId,
       'fileName': fileName,
       'to': targetPeerId,
       'target': 'broadcast',
-      'msgId': _generateMsgId(),
+      'msgId': const Uuid().v4(),
     });
   }
 
@@ -599,14 +599,17 @@ class WebRTCManager {
     String? fileId,
     String? fileHash,
   }) async {
-    await _sendFileInternal(
-      originalPath,
-      fileName,
-      file,
-      peerId,
-      customFileId: fileId,
-      fileHash: fileHash,
-    );
+    scheduleTask(() async {
+      logger.i("📤 Starting queued file transfer: $fileName");
+      await _sendFileInternal(
+        originalPath,
+        fileName,
+        file,
+        peerId,
+        customFileId: fileId,
+        fileHash: fileHash,
+      );
+    });
   }
 
   Future<void> _sendFileInternal(
@@ -617,45 +620,36 @@ class WebRTCManager {
     String? customFileId,
     String? fileHash,
   }) async {
+    final sanitizedFileName = fileName.replaceAll(
+      RegExp(r'[^\x20-\x7Eа-яА-ЯіІїЇєЄ._-]'),
+      '',
+    );
     final fileId =
         customFileId ??
         '${originalPath}_${DateTime.now().millisecondsSinceEpoch}';
-
-    if (!await file.exists()) {
-      logger.e("❌ File not found for sending: ${file.path}");
-      return;
-    }
-
+    if (!await file.exists()) return;
     final int fileSize = await file.length();
-    const int chunkSize = 16 * 1024;
+    const int chunkSize = 32 * 1024;
 
-    bool useRelay = false;
     RTCDataChannel? channel;
-
-    if (peerId != null) {
-      channel = _dataChannels[peerId];
-      if (channel == null) useRelay = true;
-    }
-
-    final String targetType =
-        (peerId == null || useRelay) ? 'broadcast' : 'direct';
+    if (peerId != null) channel = _dataChannels[peerId];
+    final String targetType = (peerId == null) ? 'broadcast' : 'direct';
 
     final Map<String, dynamic> startMessage = {
       'type': 'file-transfer-start',
       'fileId': fileId,
-      'fileName': fileName,
+      'fileName': sanitizedFileName,
       'fileSize': fileSize,
       'fileHash': fileHash,
       'originalPath': originalPath,
       'target': targetType,
-      'msgId': _generateMsgId(),
+      'msgId': const Uuid().v4(),
     };
 
-    if (useRelay || peerId == null) {
+    if (peerId == null)
       _broadcastMessage(startMessage);
-    } else {
+    else
       sendMessageToPeer(peerId, startMessage);
-    }
 
     await Future.delayed(const Duration(milliseconds: 100));
 
@@ -664,98 +658,62 @@ class WebRTCManager {
       raf = await file.open(mode: FileMode.read);
       int index = 0;
       int bytesSent = 0;
-
       while (bytesSent < fileSize) {
         if (channel != null &&
             channel.state == RTCDataChannelState.RTCDataChannelOpen) {
-          int? buffered = channel.bufferedAmount;
-          while (buffered != null && buffered > 256 * 1024) {
-            await Future.delayed(const Duration(milliseconds: 10));
-            buffered = channel.bufferedAmount;
+          if ((channel.bufferedAmount ?? 0) > 1024 * 1024) {
+            await Future.delayed(const Duration(milliseconds: 50));
+            continue;
           }
         }
 
         final Uint8List chunk = await raf.read(chunkSize);
         if (chunk.isEmpty) break;
-        final base64Data = base64Encode(chunk);
 
+        final base64Data = base64Encode(chunk);
         final Map<String, dynamic> chunkMessage = {
           'type': 'file-chunk',
           'fileId': fileId,
           'index': index,
           'data': base64Data,
           'target': targetType,
-          'msgId': _generateMsgId(),
         };
 
-        try {
-          if (useRelay || peerId == null) {
-            _broadcastMessage(chunkMessage);
-            await Future.delayed(const Duration(milliseconds: 5));
-          } else {
-            sendMessageToPeer(peerId, chunkMessage);
-            if (index % 10 == 0)
-              await Future.delayed(const Duration(milliseconds: 1));
-          }
-        } catch (e) {
-          logger.e("Error sending chunk: $e");
-          break;
+        if (peerId == null) {
+          _broadcastMessage(chunkMessage);
+          await Future.delayed(const Duration(milliseconds: 5));
+        } else {
+          sendMessageToPeer(peerId, chunkMessage);
+          if (index % 50 == 0) await Future.delayed(Duration.zero);
         }
-
         bytesSent += chunk.length;
         index++;
       }
-    } catch (e) {
-      logger.e("Error streaming file: $e");
     } finally {
       await raf?.close();
     }
 
     await Future.delayed(const Duration(milliseconds: 200));
-
-    final Map<String, dynamic> endMessage = {
+    final endMessage = {
       'type': 'file-transfer-end',
       'fileId': fileId,
       'target': targetType,
-      'msgId': _generateMsgId(),
+      'msgId': const Uuid().v4(),
     };
-
-    if (useRelay || peerId == null) {
+    if (peerId == null)
       _broadcastMessage(endMessage);
-    } else {
+    else
       sendMessageToPeer(peerId, endMessage);
-    }
 
-    logger.i("✅ File sent successfully: $fileName");
-  }
-
-  void addConnectedListener(Function(String) listener) {
-    _onConnectedListeners.add(listener);
-  }
-
-  void removeConnectedListener(Function(String) listener) {
-    _onConnectedListeners.remove(listener);
-  }
-
-  void addDisconnectedListener(VoidCallback listener) {
-    _onDisconnectedListeners.add(listener);
-  }
-
-  void removeDisconnectedListener(VoidCallback listener) {
-    _onDisconnectedListeners.remove(listener);
+    logger.i("✅ File sent successfully: $sanitizedFileName");
   }
 
   void sendFullBoardToPeer(String peerId, String boardJson) {
     sendMessageToPeer(peerId, {'type': 'full-board', 'board': boardJson});
   }
 
-  void sendFullBoard(String boardJson) {
-    _broadcastMessage({'type': 'full-board', 'board': boardJson});
-  }
-
-  void broadcastItemUpdate(BoardItem item) {
-    _broadcastMessage({'type': 'item-update', 'item': item.toJson()});
-  }
+  void broadcastItemAdd(BoardItem item) =>
+      _broadcastMessage({'type': 'item-add', 'item': item.toJson()});
 
   void broadcastConnectionUpdate(List<Connection> connections) {
     _broadcastMessage({
@@ -764,80 +722,57 @@ class WebRTCManager {
     });
   }
 
-  void broadcastItemAdd(BoardItem item) {
-    _broadcastMessage({'type': 'item-add', 'item': item.toJson()});
-  }
+  void broadcastFolderCreate(Connection folder) =>
+      _broadcastMessage({'type': 'folder-create', 'folder': folder.toJson()});
+  void broadcastFolderRename(String id, String oldN, String newN) =>
+      _broadcastMessage({
+        'type': 'folder-rename',
+        'connectionId': id,
+        'oldName': oldN,
+        'newName': newN,
+      });
+  void broadcastFolderDelete(String id, String name) => _broadcastMessage({
+    'type': 'folder-delete',
+    'connectionId': id,
+    'folderName': name,
+  });
+  void broadcastFileRename(String id, String oldN, String newN) =>
+      _broadcastMessage({
+        'type': 'file-rename',
+        'fileId': id,
+        'oldName': oldN,
+        'newName': newN,
+      });
+  void broadcastItemUpdate(BoardItem item) =>
+      _broadcastMessage({'type': 'item-update', 'item': item.toJson()});
+  void broadcastItemDelete(String id) =>
+      _broadcastMessage({'type': 'item-delete', 'id': id});
+  void broadcastBoardDescriptionUpdate(String desc) => _broadcastMessage({
+    'type': 'board-description-update',
+    'description': desc,
+  });
+  void broadcastFileMove(String id, String? connId, String name) =>
+      _broadcastMessage({
+        'type': 'file-move',
+        'fileId': id,
+        'targetConnectionId': connId,
+        'fileName': name,
+      });
 
-  void broadcastItemDelete(String itemId) {
-    _broadcastMessage({'type': 'item-delete', 'id': itemId});
-  }
+  // --- LISTENERS & DISPOSE ---
 
-  void broadcastBoardDescriptionUpdate(String description) {
-    _broadcastMessage({
-      'type': 'board-description-update',
-      'description': description,
-    });
-  }
+  void addConnectedListener(Function(String) listener) =>
+      _onConnectedListeners.add(listener);
+  void removeConnectedListener(Function(String) listener) =>
+      _onConnectedListeners.remove(listener);
+  void addDisconnectedListener(VoidCallback listener) =>
+      _onDisconnectedListeners.add(listener);
+  void removeDisconnectedListener(VoidCallback listener) =>
+      _onDisconnectedListeners.remove(listener);
 
-  void broadcastFullFileContent(String filePath, String contentBase64) {
-    _broadcastMessage({
-      'type': 'full-file-content',
-      'path': filePath,
-      'content_base64': contentBase64,
-    });
-  }
-
-  void broadcastFileTransferStart(
-    String fileId,
-    String fileName,
-    int fileSize,
-    String originalPath,
+  set onDataReceived(
+    Future<void> Function(String, Map<String, dynamic>) callback,
   ) {
-    _broadcastMessage({
-      'type': 'file-transfer-start',
-      'fileId': fileId,
-      'fileName': fileName,
-      'fileSize': fileSize,
-      'originalPath': originalPath,
-    });
-  }
-
-  void broadcastFileChunk(String fileId, int index, String base64Data) {
-    _broadcastMessage({
-      'type': 'file-chunk',
-      'fileId': fileId,
-      'index': index,
-      'data': base64Data,
-    });
-  }
-
-  void broadcastFileRename(String fileId, String oldName, String newName) {
-    _broadcastMessage({
-      'type': 'file-rename',
-      'fileId': fileId,
-      'oldName': oldName,
-      'newName': newName,
-    });
-  }
-
-  void broadcastFolderRename(
-    String connectionId,
-    String oldName,
-    String newName,
-  ) {
-    _broadcastMessage({
-      'type': 'folder-rename',
-      'connectionId': connectionId,
-      'oldName': oldName,
-      'newName': newName,
-    });
-  }
-
-  void broadcastFileTransferEnd(String fileId) {
-    _broadcastMessage({'type': 'file-transfer-end', 'fileId': fileId});
-  }
-
-  set onDataReceived(Function(String, Map<String, dynamic>) callback) {
     _onDataReceived = callback;
   }
 
@@ -847,7 +782,6 @@ class WebRTCManager {
     onConnected = null;
     onDataChannelOpen = null;
     onDisconnected = null;
-    // Очищаємо нові колбеки
     onSessionFull = null;
     onHostLimitReached = null;
   }

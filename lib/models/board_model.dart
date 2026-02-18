@@ -1,10 +1,11 @@
+import 'package:boardly/logger.dart'; // Додано для логування помилок
 import 'board_items.dart';
 import 'connection_model.dart';
 
 class BoardModel {
-  final String? id;
+  String? id;
   String? title;
-  final String? ownerId;
+  String? ownerId;
 
   List<BoardItem> items;
   List<Connection>? connections;
@@ -54,9 +55,26 @@ class BoardModel {
       id: json['id']?.toString(),
       title: json['title']?.toString(),
       ownerId: json['ownerId']?.toString(),
+      // ЗАХИЩЕНЕ ЗАВАНТАЖЕННЯ ЕЛЕМЕНТІВ
       items:
           (json['items'] as List?)
-              ?.map((e) => BoardItem.fromJson(e))
+              ?.map((e) {
+                try {
+                  return BoardItem.fromJson(e);
+                } catch (err, stack) {
+                  // Якщо елемент битий, ми його пропускаємо, але не крашимо всю дошку
+                  logger.e(
+                    '⚠️ Skipping corrupted item in board ${json['id']}: $err',
+                    error: err,
+                    stackTrace: stack,
+                  );
+                  return null;
+                }
+              })
+              .where(
+                (element) => element != null,
+              ) // Відкидаємо null (биті елементи)
+              .cast<BoardItem>() // Приводимо до правильного типу
               .toList() ??
           [],
       connections:

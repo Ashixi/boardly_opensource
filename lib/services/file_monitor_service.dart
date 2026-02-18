@@ -1,16 +1,17 @@
-// lib/services/file_monitor_service.dart
-
 import 'dart:async';
 import 'dart:io';
 import 'package:boardly/data/board_storage.dart';
 import 'package:boardly/logger.dart';
 import 'package:boardly/web_rtc/rtc.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:crypto/crypto.dart';
+import 'package:boardly/utils/file_utils.dart';
 
 class FileMonitorService {
   final WebRTCManager? rtcManager;
   final String boardId;
+
   final String? Function(String filePath) getFileIdCallback;
 
   final Function(String path)? onFileAdded;
@@ -22,8 +23,15 @@ class FileMonitorService {
   final Function(String path)? onFolderDeleted;
 
   StreamSubscription<FileSystemEvent>? _watcherSubscription;
-  final Set<String> _ignoredFiles = {};
+
+  final Map<String, Timer> _ignoredPaths = {};
+
+  final Set<String> _manualIgnorePaths = {};
+
   final Map<String, Timer> _debounceTimers = {};
+
+  bool _isPaused = false;
+  bool _isDisposed = false;
 
   FileMonitorService({
     this.rtcManager,
@@ -37,6 +45,49 @@ class FileMonitorService {
     this.onFolderDeleted,
   });
 
+  void pause() {
+    _isPaused = true;
+    logger.i("⏸️ File Monitor PAUSED");
+  }
+
+  void resume() {
+    if (_isDisposed) return;
+    Timer(const Duration(milliseconds: 500), () {
+      if (_isDisposed) return;
+      _isPaused = false;
+      logger.i("▶️ File Monitor RESUMED");
+    });
+  }
+
+  void startIgnoring(String path) {
+    if (_isDisposed) return;
+    final normalized = _normalizePath(path);
+    _manualIgnorePaths.add(normalized);
+  }
+
+  void stopIgnoring(String path) {
+    if (_isDisposed) return;
+    final normalized = _normalizePath(path);
+    Timer(const Duration(milliseconds: 500), () {
+      _manualIgnorePaths.remove(normalized);
+    });
+  }
+
+  void ignorePath(String path) {
+    if (_isDisposed) return;
+
+    final normalized = _normalizePath(path);
+    _ignoredPaths[normalized]?.cancel();
+
+    _ignoredPaths[normalized] = Timer(const Duration(seconds: 3), () {
+      _ignoredPaths.remove(normalized);
+    });
+  }
+
+  String _normalizePath(String path) {
+    return p.canonicalize(path);
+  }
+
   Future<void> startMonitoring() async {
     try {
       final filesDirPath = await BoardStorage.getBoardFilesDirAuto(boardId);
@@ -46,8 +97,11 @@ class FileMonitorService {
         await directory.create(recursive: true);
       }
 
-      logger.i('👀 Starting Full file/folder monitor for: $filesDirPath');
+      logger.i('👀 Starting ROBUST file/folder monitor for: $filesDirPath');
+
       await Future.delayed(const Duration(milliseconds: 1000));
+
+      if (_isDisposed) return;
 
       _watcherSubscription = directory
           .watch(
@@ -58,129 +112,136 @@ class FileMonitorService {
                 FileSystemEvent.delete,
             recursive: true,
           )
-          .listen((event) {
-            _handleFileSystemEvent(event);
-          }, onError: (e) => logger.e('File Watcher Error: $e'));
+          .listen(
+            (event) => _handleFileSystemEvent(event),
+            onError: (e) => logger.e('File Watcher Error: $e'),
+          );
     } catch (e) {
       logger.e('Failed to start file monitor: $e');
     }
   }
 
   void _handleFileSystemEvent(FileSystemEvent event) {
-    String filePath = event.path;
+    if (_isPaused) return;
+
+    final String path = event.path;
+    final String normalizedPath = _normalizePath(path);
+    final String fileName = p.basename(path);
+
+    if (_isSystemFile(fileName)) return;
+
+    if (_ignoredPaths.containsKey(normalizedPath)) return;
+
+    if (_manualIgnorePaths.contains(normalizedPath)) return;
+
     String? destinationPath;
+    if (event is FileSystemMoveEvent && event.destination != null) {
+      destinationPath = event.destination!;
+      final normalizedDest = _normalizePath(destinationPath);
 
-    if (event is FileSystemMoveEvent) {
-      if (event.destination != null) {
-        destinationPath = event.destination!;
-      }
-    }
-
-    final String fileName = p.basename(filePath);
-
-    if (fileName == 'Thumbs.db' ||
-        fileName == 'desktop.ini' ||
-        fileName == '.DS_Store' ||
-        fileName.startsWith('~\$') ||
-        fileName.endsWith('.tmp') ||
-        fileName.endsWith('.part') ||
-        fileName.startsWith('.')) {
-      return;
-    }
-
-    if (_ignoredFiles.contains(fileName.toLowerCase())) {
-      return;
+      if (_ignoredPaths.containsKey(normalizedDest)) return;
+      if (_manualIgnorePaths.contains(normalizedDest)) return;
     }
 
     if (event.isDirectory) {
-      if (event is FileSystemCreateEvent) {
-        if (_debounceTimers.containsKey(filePath)) {
-          _debounceTimers[filePath]?.cancel();
-        }
-        _debounceTimers[filePath] = Timer(
-          const Duration(milliseconds: 500),
-          () {
-            _debounceTimers.remove(filePath);
-            if (_ignoredFiles.contains(fileName.toLowerCase())) return;
-            onFolderAdded?.call(filePath);
-          },
-        );
-      } else if (event is FileSystemDeleteEvent) {
-        onFolderDeleted?.call(filePath);
-      } else if (event is FileSystemMoveEvent && destinationPath != null) {
-        onFolderRenamed?.call(filePath, destinationPath);
-      }
+      _handleFolderEvent(event, path, destinationPath);
       return;
     }
 
-    if (event is FileSystemDeleteEvent) {
-      onFileDeleted?.call(filePath);
-      return;
-    }
+    _handleFileEvent(event, path, destinationPath, fileName);
+  }
 
-    if (event is FileSystemMoveEvent && destinationPath != null) {
-      onFileRenamed?.call(filePath, destinationPath);
-      return;
-    }
+  bool _isSystemFile(String fileName) {
+    return fileName == 'meta.json' ||
+        fileName.startsWith('meta.json') ||
+        fileName == 'Thumbs.db' ||
+        fileName == 'desktop.ini' ||
+        fileName == '.DS_Store' ||
+        fileName.startsWith(r'~$') ||
+        fileName.endsWith('.tmp') ||
+        fileName.endsWith('.part') ||
+        (fileName.startsWith('.') && fileName.length > 1);
+  }
+
+  void _handleFolderEvent(
+    FileSystemEvent event,
+    String path,
+    String? destPath,
+  ) {
     if (event is FileSystemCreateEvent) {
-      Timer(const Duration(milliseconds: 1000), () async {
-        if (!await File(filePath).exists()) {
-          return;
+      _debounce(path, () {
+        if (_ignoredPaths.containsKey(_normalizePath(path))) return;
+        if (_manualIgnorePaths.contains(_normalizePath(path))) return;
+        onFolderAdded?.call(path);
+      }, duration: 500);
+    } else if (event is FileSystemDeleteEvent) {
+      onFolderDeleted?.call(path);
+    } else if (event is FileSystemMoveEvent && destPath != null) {
+      onFolderRenamed?.call(path, destPath);
+    }
+  }
+
+  void _handleFileEvent(
+    FileSystemEvent event,
+    String path,
+    String? destPath,
+    String fileName,
+  ) {
+    if (event is FileSystemDeleteEvent) {
+      onFileDeleted?.call(path);
+      return;
+    }
+
+    if (event is FileSystemMoveEvent && destPath != null) {
+      onFileRenamed?.call(path, destPath);
+      return;
+    }
+
+    if (event is FileSystemCreateEvent || event is FileSystemModifyEvent) {
+      Timer(const Duration(milliseconds: 200), () async {
+        if (_isPaused) return;
+        final normalized = _normalizePath(path);
+        if (_ignoredPaths.containsKey(normalized)) return;
+        if (_manualIgnorePaths.contains(normalized)) return;
+
+        if (!await File(path).exists()) return;
+
+        if (event is FileSystemCreateEvent) {
+          onFileAdded?.call(path);
         }
-        if (_ignoredFiles.contains(fileName.toLowerCase())) {
-          return;
-        }
-        onFileAdded?.call(filePath);
+
+        _debounce(path, () async {
+          if (await File(path).exists()) {
+            await _processFileChange(path, fileName);
+          }
+        }, duration: 1000);
       });
     }
+  }
 
-    if (_debounceTimers.containsKey(filePath)) {
-      _debounceTimers[filePath]?.cancel();
+  void _debounce(String tag, Function() action, {int duration = 1000}) {
+    if (_debounceTimers.containsKey(tag)) {
+      _debounceTimers[tag]?.cancel();
     }
-
-    final targetPath = destinationPath ?? filePath;
-
-    _debounceTimers[targetPath] = Timer(
-      const Duration(milliseconds: 1000),
-      () async {
-        _debounceTimers.remove(targetPath);
-        if (await File(targetPath).exists()) {
-          await _processFileChange(targetPath, p.basename(targetPath));
-        }
-      },
-    );
+    _debounceTimers[tag] = Timer(Duration(milliseconds: duration), action);
   }
 
   Future<void> _processFileChange(String filePath, String fileName) async {
-    final file = File(filePath);
+    if (_isPaused) return;
+    final normalized = _normalizePath(filePath);
+    if (_ignoredPaths.containsKey(normalized)) return;
+    if (_manualIgnorePaths.contains(normalized)) return;
+
     final String? itemId = getFileIdCallback(filePath);
     if (itemId == null) return;
 
-    if (_ignoredFiles.contains(fileName.toLowerCase())) return;
+    final file = File(filePath);
 
     try {
       if (!await file.exists()) return;
 
-      int attempts = 0;
-      int lastLength = -1;
-      bool isReady = false;
-
-      while (attempts < 5) {
-        try {
-          final stat = await file.stat();
-          final length = stat.size;
-          if (length == lastLength) {
-            isReady = true;
-            break;
-          }
-          lastLength = length;
-        } catch (_) {}
-        await Future.delayed(const Duration(milliseconds: 500));
-        attempts++;
-      }
-
-      if (!isReady) {
-        logger.w('⚠️ File $fileName unstable. Skipping.');
+      if (!await _isFileStable(file)) {
+        logger.w('⚠️ File $fileName unstable/locked. Skipping broadcast.');
         return;
       }
 
@@ -191,7 +252,6 @@ class FileMonitorService {
         final raf = await file.open(mode: FileMode.read);
         await raf.close();
       } catch (e) {
-        logger.w('⚠️ File locked: $fileName. Creating Shadow Copy...');
         try {
           final tempDir = Directory.systemTemp;
           final tempPath = p.join(
@@ -201,16 +261,14 @@ class FileMonitorService {
           await file.copy(tempPath);
           fileToSend = File(tempPath);
           isShadowCopy = true;
-        } catch (copyError) {
-          logger.e('❌ Failed to create shadow copy: $copyError');
+        } catch (_) {
           return;
         }
       }
 
       if (rtcManager != null) {
         logger.i('📂 Streaming updated file: $fileName');
-
-        final String fileHash = await _calculateFileHash(fileToSend);
+        final String fileHash = await _calculateFileHash(fileToSend.path);
 
         await rtcManager!.broadcastFile(
           filePath,
@@ -219,50 +277,62 @@ class FileMonitorService {
           customFileId: itemId,
           fileHash: fileHash,
         );
-      } else {
-        logger.i(
-          '📂 File changed locally: $fileName (No WebRTC connection, skipping broadcast)',
-        );
       }
 
       if (isShadowCopy) {
-        try {
-          await Future.delayed(const Duration(seconds: 2));
-          if (await fileToSend.exists()) await fileToSend.delete();
-        } catch (_) {}
+        Future.delayed(const Duration(seconds: 2), () async {
+          try {
+            if (await fileToSend.exists()) await fileToSend.delete();
+          } catch (_) {}
+        });
       }
     } catch (e) {
       logger.e('❌ Error processing file $fileName: $e');
     }
   }
 
-  Future<String> _calculateFileHash(File file) async {
-    try {
-      final stream = file.openRead();
-      final digest = await md5.bind(stream).first;
-      return digest.toString();
-    } catch (e) {
-      logger.e("Hash error: $e");
-      return "";
+  Future<bool> _isFileStable(File file) async {
+    int attempts = 0;
+    int lastLength = -1;
+    while (attempts < 5) {
+      try {
+        final stat = await file.stat();
+        final length = stat.size;
+        if (length == lastLength && length >= 0) return true;
+        lastLength = length;
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 500));
+      attempts++;
     }
+    return false;
   }
 
-  /// Use this to ignore a file OR folder name from the next event.
-  /// Useful when creating folders via UI ('F' key) to avoid feedback loops.
-  void ignoreNextChange(String name) {
-    final lowerName = name.toLowerCase();
-    _ignoredFiles.add(lowerName);
-
-    // Keep it ignored for a bit longer to be safe (OS events can be delayed)
-    Timer(const Duration(seconds: 5), () {
-      _ignoredFiles.remove(lowerName);
-    });
+  Future<String> _calculateFileHash(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return "";
+    int attempts = 0;
+    while (attempts < 3) {
+      try {
+        final hash = await compute(calculateMd5InIsolate, filePath);
+        if (hash.isNotEmpty) return hash;
+        throw Exception("Empty hash result");
+      } catch (e) {
+        attempts++;
+        if (attempts >= 3) return "";
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    }
+    return "";
   }
 
   void stop() {
+    _isDisposed = true;
     _watcherSubscription?.cancel();
     _debounceTimers.values.forEach((timer) => timer.cancel());
     _debounceTimers.clear();
+    _ignoredPaths.values.forEach((timer) => timer.cancel());
+    _ignoredPaths.clear();
+    _manualIgnorePaths.clear();
     logger.i('File monitor stopped');
   }
 }

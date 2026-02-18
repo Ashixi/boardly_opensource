@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 class HostScreen extends StatefulWidget {
   final Future<void> Function(BoardModel board) onOpenAndHostBoard;
   final Future<BoardModel> Function(String boardName) onAddNewAndHostBoard;
+  final Future<void> Function(BoardModel board) onHostExistingBoard;
   final Future<void> Function(BoardModel board) onDeleteBoard;
   final bool isPro;
 
@@ -17,6 +18,7 @@ class HostScreen extends StatefulWidget {
     super.key,
     required this.onOpenAndHostBoard,
     required this.onAddNewAndHostBoard,
+    required this.onHostExistingBoard,
     required this.onDeleteBoard,
     required this.isPro,
   });
@@ -74,6 +76,62 @@ class _HostScreenState extends State<HostScreen> {
     }
   }
 
+  Future<BoardModel?> _showLocalBoardPicker() async {
+    final allBoards = await BoardStorage.loadAllBoards();
+
+    final localCandidates =
+        allBoards
+            .where(
+              (b) => !b.isJoined && !b.isConnectionBoard && b.ownerId == null,
+            )
+            .toList();
+
+    if (!mounted) return null;
+
+    if (localCandidates.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(S.t('no_local_boards_available'))));
+      return null;
+    }
+
+    return await showDialog<BoardModel>(
+      context: context,
+      builder:
+          (ctx) => AlertDialog(
+            title: Text(S.t('select_board_to_host')),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 300,
+              child: ListView.separated(
+                itemCount: localCandidates.length,
+                separatorBuilder: (ctx, i) => const Divider(),
+                itemBuilder: (ctx, i) {
+                  final board = localCandidates[i];
+                  return ListTile(
+                    leading: const Icon(
+                      Icons.dashboard_customize,
+                      color: Colors.grey,
+                    ),
+                    title: Text(board.title ?? "Untitled"),
+                    subtitle: Text("ID: ...${board.id?.substring(0, 4) ?? ''}"),
+                    onTap: () {
+                      Navigator.pop(ctx, board);
+                    },
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, null),
+                child: Text(S.t('cancel')),
+              ),
+            ],
+          ),
+    );
+  }
+
   Future<void> _handleDelete(BoardModel board) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -111,54 +169,128 @@ class _HostScreenState extends State<HostScreen> {
     }
   }
 
-  Future<void> _handleCreateNewBoard() async {
+  Future<void> _handleCreateOrHostBoard() async {
     final userData = await AuthStorage.getUserData();
-    if (userData == null) {
-      if (!mounted) return;
-      return;
-    }
+    if (userData == null) return;
 
     if (!widget.isPro && hostingBoards.length >= 4) {
       if (!mounted) return;
-      showDialog(
-        context: context,
-        builder:
-            (context) => AlertDialog(
-              title: Text(S.t('limit_reached')),
-              content: Text(S.t('limit_host_desc')),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text(S.t('cancel')),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-
-                    String urlString;
-                    if (appLocale.value.languageCode == 'uk') {
-                      urlString = "https://boardly.studio/ua/profile.html";
-                    } else {
-                      urlString = "https://boardly.studio/en/login.html";
-                    }
-
-                    final Uri url = Uri.parse(urlString);
-                    if (await canLaunchUrl(url)) {
-                      await launchUrl(
-                        url,
-                        mode: LaunchMode.externalApplication,
-                      );
-                    }
-                  },
-                  child: Text(S.t('manage_subscription')),
-                ),
-              ],
-            ),
-      );
+      _showLimitDialog();
       return;
     }
 
     if (!mounted) return;
+
+    final String? action = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black54,
+      builder: (ctx) => _buildSelectionDialog(ctx),
+    );
+
+    if (action == null) return;
+
+    if (action == 'create_new') {
+      await _createNewBoardFlow();
+    } else if (action == 'host_existing') {
+      await _hostExistingBoardFlow();
+    }
+  }
+
+  Widget _buildSelectionDialog(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: EdgeInsets.zero,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.of(context).pop(),
+        child: SizedBox.expand(
+          child: Center(
+            child: SingleChildScrollView(
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 32,
+                runSpacing: 32,
+                children: [
+                  _SquareButton(
+                    title: S.t('create_new'),
+                    icon: Icons.add_circle_outline,
+                    color: const Color(0xFF009688),
+                    size: 320,
+                    onTap: () => Navigator.pop(context, 'create_new'),
+                  ),
+                  _SquareButton(
+                    title: S.t('from_device'),
+                    icon: Icons.upload_file,
+                    color: Colors.blueAccent,
+                    size: 320,
+                    onTap: () => Navigator.pop(context, 'host_existing'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showLimitDialog() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Text(S.t('limit_reached')),
+            content: Text(S.t('limit_host_desc')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(S.t('cancel')),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  String urlString;
+                  if (appLocale.value.languageCode == 'uk') {
+                    urlString = "https://boardly.studio/ua/profile.html";
+                  } else {
+                    urlString = "https://boardly.studio/en/login.html";
+                  }
+                  final Uri url = Uri.parse(urlString);
+                  if (await canLaunchUrl(url)) {
+                    await launchUrl(url, mode: LaunchMode.externalApplication);
+                  }
+                },
+                child: Text(S.t('manage_subscription')),
+              ),
+            ],
+          ),
+    );
+  }
+
+  Future<void> _hostExistingBoardFlow() async {
+    final selectedBoard = await _showLocalBoardPicker();
+    if (selectedBoard != null) {
+      try {
+        setState(() => isLoading = true);
+        await widget.onHostExistingBoard(selectedBoard);
+        await _loadBoards();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text("Error hosting board: $e")));
+        }
+      } finally {
+        if (mounted) setState(() => isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _createNewBoardFlow() async {
     String? customName = await showDialog<String>(
       context: context,
       builder: (context) {
@@ -243,7 +375,7 @@ class _HostScreenState extends State<HostScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         heroTag: 'host_btn',
-        onPressed: _handleCreateNewBoard,
+        onPressed: _handleCreateOrHostBoard,
         child: const Icon(Icons.add),
       ),
     );
@@ -299,6 +431,77 @@ class _HostScreenState extends State<HostScreen> {
           },
         );
       },
+    );
+  }
+}
+
+class _SquareButton extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  final double size;
+
+  const _SquareButton({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.size = 130,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final double iconSize = size * 0.25;
+    final double fontSize = size * 0.06;
+
+    return Material(
+      color: Colors.white,
+      elevation: 8,
+      shadowColor: Colors.black26,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(size * 0.15),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(size * 0.15),
+        splashColor: color.withOpacity(0.1),
+        highlightColor: color.withOpacity(0.05),
+        child: Container(
+          width: size,
+          height: size,
+          padding: EdgeInsets.symmetric(
+            horizontal: size * 0.08,
+            vertical: size * 0.05,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: EdgeInsets.all(size * 0.08),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: iconSize, color: color),
+              ),
+              SizedBox(height: size * 0.04),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                  height: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

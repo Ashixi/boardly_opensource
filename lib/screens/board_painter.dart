@@ -1,27 +1,27 @@
 // lib/screens/board_painter.dart
-import 'dart:math'; 
-import 'dart:ui' as ui; 
+import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:boardly/models/board_items.dart';
 import 'package:boardly/models/connection_model.dart';
 import 'package:flutter/material.dart';
+// Для firstWhereOrNull
 
 class BoardPainter extends CustomPainter {
   final List<BoardItem> items;
   final Offset offset;
   final double scale;
   final BoardItem? selectedItem;
-
- 
+  final BoardItem? linkTargetItem; // <--- ДОДАТИ ЦЕ
   final List<BoardItem>? linkItems;
   final List<BoardLink>? links;
+  // Це список постійних стрілок
 
   // Для Папок (F)
   final List<BoardItem>? folderSelectionItems;
   final List<Connection>? connections;
   final bool isFPressed;
 
- 
   final Offset? tempArrowStart;
   final Offset? tempArrowEnd;
   final Color tempArrowColor;
@@ -30,6 +30,7 @@ class BoardPainter extends CustomPainter {
   final Map<String, ui.Image>? fileIcons;
 
   BoardPainter({
+    this.linkTargetItem, // <--- ДОДАТИ В КОНСТРУКТОР
     required this.items,
     required this.offset,
     required this.scale,
@@ -54,48 +55,40 @@ class BoardPainter extends CustomPainter {
     canvas.translate(offset.dx, offset.dy);
     canvas.scale(scale);
 
+    // 1. Сітка
     _drawGrid(canvas, size);
 
-    _drawVisualLinks(canvas);
+    // 2. --- ДОДАНО --- Малюємо постійні стрілки (links)
+    _drawLinks(canvas);
+
+    if (linkTargetItem != null) {
+      final position = linkTargetItem!.position;
+      final rect = Rect.fromLTWH(position.dx, position.dy, 100.0, 100.0);
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(20));
+
+      final paint =
+          Paint()
+            ..color = Colors.greenAccent.withOpacity(0.5)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 4.0
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+
+      canvas.drawRRect(rrect, paint);
+    }
+
+    // 3. Тимчасові стрілки (Drag & Drop створення)
     _drawTempLinks(canvas);
     _drawDragArrow(canvas);
 
     const iconSize = 100.0;
 
+    // 4. Малюємо файли
     for (final item in items) {
-      if (_isItemInCollapsedFolder(item)) continue;
-
       final position = item.position;
       final rect = Rect.fromLTWH(position.dx, position.dy, iconSize, iconSize);
       final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
 
-      if (isFPressed && item.connectionId != null && connections != null) {
-        final conn = connections!.firstWhereOrNull(
-          (c) => c.id == item.connectionId,
-        );
-        if (conn != null) {
-          final color = Color(conn.colorValue);
-
-          canvas.drawRRect(
-            rrect,
-            Paint()
-              ..color = color.withOpacity(0.3)
-              ..style = PaintingStyle.fill
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30),
-          );
-
-          canvas.drawRRect(
-            rrect,
-            Paint()
-              ..color = color.withOpacity(0.5)
-              ..style = PaintingStyle.fill
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
-          );
-
-        }
-      }
-
-
+      // Ефекти виділення
       bool isSelected = false;
       Color glowColor = Colors.white;
 
@@ -119,7 +112,6 @@ class BoardPainter extends CustomPainter {
             ..style = PaintingStyle.fill
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 40),
         );
-
         canvas.drawRRect(
           rrect,
           Paint()
@@ -127,20 +119,19 @@ class BoardPainter extends CustomPainter {
             ..style = PaintingStyle.fill
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 15),
         );
-
       }
 
+      // Іконки
       ui.Image? imageToDraw;
       if (fileIcons != null) {
         String typeKey = item.type.toLowerCase();
-
         if (typeKey == 'doc') typeKey = 'docx';
-
         imageToDraw = fileIcons![typeKey];
         imageToDraw ??= fileIcons!['default'];
       }
 
       if (imageToDraw != null) {
+        // ... код малювання картинки ...
         paintImage(
           canvas: canvas,
           rect: rect,
@@ -149,22 +140,16 @@ class BoardPainter extends CustomPainter {
           filterQuality: FilterQuality.medium,
         );
       } else {
+        // ... заглушка ...
         final bgPaint = Paint()..color = Colors.blueAccent.withAlpha(180);
         canvas.drawRRect(
           RRect.fromRectAndRadius(rect, const Radius.circular(12)),
           bgPaint,
         );
-
-        const icon = TextSpan(text: '📄', style: TextStyle(fontSize: 40));
-        final iconPainter = TextPainter(
-          text: icon,
-          textDirection: TextDirection.ltr,
-        );
-        iconPainter.layout();
-        iconPainter.paint(canvas, rect.topLeft + const Offset(30, 10));
       }
 
-      final int maxChars = 30;
+      // Текст
+      const int maxChars = 30;
       final displayName =
           item.fileName.length > maxChars
               ? '${item.fileName.substring(0, maxChars - 3)}...'
@@ -173,61 +158,67 @@ class BoardPainter extends CustomPainter {
       final textPainter = TextPainter(
         text: TextSpan(
           text: displayName,
-          style: const TextStyle(
-            color: Colors.black,
-            fontSize: 18,  
-            fontWeight: FontWeight.bold,
-            backgroundColor:
-                Colors.white70, 
+          style: TextStyle(
+            color: Colors.black, // Чорний колір тексту
+            fontSize: 23, // Збільшено з 14 до 20
+            fontWeight: FontWeight.bold, // Робимо жирним
+            shadows: [
+              Shadow(
+                offset: const Offset(1, 1),
+                blurRadius: 2,
+                color: Colors.white.withOpacity(
+                  0.8,
+                ), // Біла тінь для контрасту на фоні сітки
+              ),
+            ],
           ),
         ),
         textDirection: TextDirection.ltr,
         textAlign: TextAlign.center,
       );
 
+      // Дозволяємо тексту бути трохи ширшим за іконку (iconSize + 60)
       textPainter.layout(maxWidth: iconSize + 60);
 
       textPainter.paint(
         canvas,
-        rect.bottomLeft + Offset((iconSize - textPainter.width) / 2, 10),
+        Offset(
+          position.dx + (iconSize - textPainter.width) / 2,
+          position.dy + iconSize + 8, // Трохи збільшив відступ від іконки
+        ),
       );
     }
 
-    _drawCollapsedFolders(canvas);
     canvas.restore();
   }
 
-  bool _isItemInCollapsedFolder(BoardItem item) {
-    if (item.connectionId == null || connections == null) return false;
-    final conn = connections!.firstWhereOrNull(
-      (c) => c.id == item.connectionId,
-    );
-    return conn != null && conn.isCollapsed;
-  }
-
-  void _drawVisualLinks(Canvas canvas) {
-    if (links == null) return;
+  // --- НОВИЙ МЕТОД: Малює збережені стрілки ---
+  void _drawLinks(Canvas canvas) {
+    if (links == null || links!.isEmpty) return;
 
     for (final link in links!) {
+      // Знаходимо об'єкти за ID
       final fromItem = items.firstWhereOrNull((i) => i.id == link.fromItemId);
       final toItem = items.firstWhereOrNull((i) => i.id == link.toItemId);
 
+      // Якщо одного з файлів немає (наприклад, видалений) — не малюємо
       if (fromItem == null || toItem == null) continue;
-      if (_isItemInCollapsedFolder(fromItem) ||
-          _isItemInCollapsedFolder(toItem))
-        continue;
-
-      final center1 = fromItem.position + const Offset(50, 50);
-      final center2 = toItem.position + const Offset(50, 50);
-
-      final start = _getRectIntersection(center1, center2, 50.0);
-      final end = _getRectIntersection(center2, center1, 50.0);
 
       final paint =
           Paint()
-            ..color = Color(link.colorValue)
-            ..strokeWidth = link.strokeWidth
+            ..color = Color(link.colorValue) // Колір з моделі
+            ..strokeWidth =
+                link
+                    .strokeWidth // Товщина з моделі
             ..style = PaintingStyle.stroke;
+
+      // Центри іконок (іконка 100x100 -> центр +50)
+      final startCenter = fromItem.position + const Offset(50, 50);
+      final endCenter = toItem.position + const Offset(50, 50);
+
+      // Рахуємо перетин з краями іконок, щоб стрілка не заходила всередину
+      final start = _getRectIntersection(startCenter, endCenter, 50.0);
+      final end = _getRectIntersection(endCenter, startCenter, 50.0);
 
       _drawArrow(canvas, start, end, paint);
     }
@@ -241,6 +232,7 @@ class BoardPainter extends CustomPainter {
             ..strokeWidth = tempArrowWidth
             ..style = PaintingStyle.stroke;
 
+      // Рахуємо початок від краю іконки, з якої тягнемо
       final start = _getRectIntersection(tempArrowStart!, tempArrowEnd!, 50.0);
 
       _drawArrow(canvas, start, tempArrowEnd!, paint);
@@ -281,6 +273,8 @@ class BoardPainter extends CustomPainter {
     );
 
     canvas.drawPath(path, paint..style = PaintingStyle.stroke);
+    // Повертаємо стиль назад, бо drawPath може змінити його на fill за замовчуванням
+    paint.style = PaintingStyle.stroke;
   }
 
   void _drawTempLinks(Canvas canvas) {
@@ -299,75 +293,18 @@ class BoardPainter extends CustomPainter {
     }
   }
 
-  void _drawCollapsedFolders(Canvas canvas) {
-    if (connections == null) return;
-    for (final connection in connections!) {
-      if (connection.isCollapsed && connection.collapsedPosition != null) {
-        final position = connection.collapsedPosition!;
-        final rect = Rect.fromLTWH(position.dx, position.dy, 100.0, 100.0);
-        ui.Image? folderIcon = fileIcons?['folder'];
-
-        if (folderIcon != null) {
-          paintImage(
-            canvas: canvas,
-            rect: rect,
-            image: folderIcon,
-            fit: BoxFit.contain,
-          );
-        } else {
-          final rrect = RRect.fromRectAndRadius(
-            rect,
-            const Radius.circular(12),
-          );
-          final bgPaint =
-              Paint()
-                ..color = Color(connection.colorValue)
-                ..style = PaintingStyle.fill;
-          canvas.drawRRect(rrect, bgPaint);
-          const icon = TextSpan(text: '📁', style: TextStyle(fontSize: 40));
-          final iconPainter = TextPainter(
-            text: icon,
-            textDirection: TextDirection.ltr,
-          );
-          iconPainter.layout();
-          iconPainter.paint(canvas, rect.topLeft + const Offset(30, 10));
-        }
-
-        final int maxFolderChars = 30;
-        final displayName =
-            connection.name.length > maxFolderChars
-                ? '${connection.name.substring(0, maxFolderChars - 3)}...'
-                : connection.name;
-
-        final textPainter = TextPainter(
-          text: TextSpan(
-            text: displayName,
-            style: const TextStyle(
-              color: Colors.black,
-              fontSize: 18, 
-              fontWeight: FontWeight.bold,
-              backgroundColor: Colors.white70,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-          textAlign: TextAlign.center,
-        );
-
-        textPainter.layout(maxWidth: 160); 
-        textPainter.paint(
-          canvas,
-          rect.bottomLeft + Offset((100 - textPainter.width) / 2, 10),
-        );
-      }
-    }
-  }
-
   void _drawGrid(Canvas canvas, Size size) {
     final gridPaint =
         Paint()
           ..color = Colors.grey.withOpacity(0.3)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.5;
+
+    // Щоб сітка була "нескінченною" і рухалась, треба врахувати offset
+    // Але твоя реалізація просто малює лінії по розміру екрану.
+    // Це ок, якщо background статичний, але зазвичай сітка має рухатись разом з контентом.
+    // Для простоти залишаємо як є, але краще робити infinite grid.
+
     for (double x = -size.width; x < size.width; x += 20) {
       canvas.drawLine(
         Offset(x, -size.height),
